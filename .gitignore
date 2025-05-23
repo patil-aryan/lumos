@@ -4,10 +4,13 @@
 node_modules
 .pnp
 .pnp.js
-
+.cursorrules
 # testing
 coverage
-
+.env.local
+.env.example
+vercel-ai-chatbot.txt
+chat-actions.txt
 # next.js
 .next/
 out/
