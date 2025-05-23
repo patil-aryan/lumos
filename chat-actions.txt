@@ -1,0 +1,987 @@
+
+================================================
+FILE: app/(chat)/actions.ts
+================================================
+'use server';
+
+import { generateText, type UIMessage } from 'ai';
+import { cookies } from 'next/headers';
+import {
+  deleteMessagesByChatIdAfterTimestamp,
+  getMessageById,
+  updateChatVisiblityById,
+} from '@/lib/db/queries';
+import type { VisibilityType } from '@/components/visibility-selector';
+import { myProvider } from '@/lib/ai/providers';
+
+export async function saveChatModelAsCookie(model: string) {
+  const cookieStore = await cookies();
+  cookieStore.set('chat-model', model);
+}
+
+export async function generateTitleFromUserMessage({
+  message,
+}: {
+  message: UIMessage;
+}) {
+  const { text: title } = await generateText({
+    model: myProvider.languageModel('title-model'),
+    system: `\n
+    - you will generate a short title based on the first message a user begins a conversation with
+    - ensure it is not more than 80 characters long
+    - the title should be a summary of the user's message
+    - do not use quotes or colons`,
+    prompt: JSON.stringify(message),
+  });
+
+  return title;
+}
+
+export async function deleteTrailingMessages({ id }: { id: string }) {
+  const [message] = await getMessageById({ id });
+
+  await deleteMessagesByChatIdAfterTimestamp({
+    chatId: message.chatId,
+    timestamp: message.createdAt,
+  });
+}
+
+export async function updateChatVisibility({
+  chatId,
+  visibility,
+}: {
+  chatId: string;
+  visibility: VisibilityType;
+}) {
+  await updateChatVisiblityById({ chatId, visibility });
+}
+
+
+
+
+================================================
+FILE: app/(chat)/page.tsx
+================================================
+import { cookies } from 'next/headers';
+
+import { Chat } from '@/components/chat';
+import { DEFAULT_CHAT_MODEL } from '@/lib/ai/models';
+import { generateUUID } from '@/lib/utils';
+import { DataStreamHandler } from '@/components/data-stream-handler';
+import { auth } from '../(auth)/auth';
+import { redirect } from 'next/navigation';
+
+export default async function Page() {
+  const session = await auth();
+
+  if (!session) {
+    redirect('/api/auth/guest');
+  }
+
+  const id = generateUUID();
+
+  const cookieStore = await cookies();
+  const modelIdFromCookie = cookieStore.get('chat-model');
+
+  if (!modelIdFromCookie) {
+    return (
+      <>
+        <Chat
+          key={id}
+          id={id}
+          initialMessages={[]}
+          initialChatModel={DEFAULT_CHAT_MODEL}
+          initialVisibilityType="private"
+          isReadonly={false}
+          session={session}
+          autoResume={false}
+        />
+        <DataStreamHandler id={id} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Chat
+        key={id}
+        id={id}
+        initialMessages={[]}
+        initialChatModel={modelIdFromCookie.value}
+        initialVisibilityType="private"
+        isReadonly={false}
+        session={session}
+        autoResume={false}
+      />
+      <DataStreamHandler id={id} />
+    </>
+  );
+}
+
+
+
+================================================
+FILE: app/(chat)/api/chat/route.ts
+================================================
+import {
+  appendClientMessage,
+  appendResponseMessages,
+  createDataStream,
+  smoothStream,
+  streamText,
+} from 'ai';
+import { auth, type UserType } from '@/app/(auth)/auth';
+import { type RequestHints, systemPrompt } from '@/lib/ai/prompts';
+import {
+  createStreamId,
+  deleteChatById,
+  getChatById,
+  getMessageCountByUserId,
+  getMessagesByChatId,
+  getStreamIdsByChatId,
+  saveChat,
+  saveMessages,
+} from '@/lib/db/queries';
+import { generateUUID, getTrailingMessageId } from '@/lib/utils';
+import { generateTitleFromUserMessage } from '../../actions';
+import { createDocument } from '@/lib/ai/tools/create-document';
+import { updateDocument } from '@/lib/ai/tools/update-document';
+import { requestSuggestions } from '@/lib/ai/tools/request-suggestions';
+import { getWeather } from '@/lib/ai/tools/get-weather';
+import { isProductionEnvironment } from '@/lib/constants';
+import { myProvider } from '@/lib/ai/providers';
+import { entitlementsByUserType } from '@/lib/ai/entitlements';
+import { postRequestBodySchema, type PostRequestBody } from './schema';
+import { geolocation } from '@vercel/functions';
+import {
+  createResumableStreamContext,
+  type ResumableStreamContext,
+} from 'resumable-stream';
+import { after } from 'next/server';
+import type { Chat } from '@/lib/db/schema';
+import { differenceInSeconds } from 'date-fns';
+import { ChatSDKError } from '@/lib/errors';
+
+export const maxDuration = 60;
+
+let globalStreamContext: ResumableStreamContext | null = null;
+
+function getStreamContext() {
+  if (!globalStreamContext) {
+    try {
+      globalStreamContext = createResumableStreamContext({
+        waitUntil: after,
+      });
+    } catch (error: any) {
+      if (error.message.includes('REDIS_URL')) {
+        console.log(
+          ' > Resumable streams are disabled due to missing REDIS_URL',
+        );
+      } else {
+        console.error(error);
+      }
+    }
+  }
+
+  return globalStreamContext;
+}
+
+export async function POST(request: Request) {
+  let requestBody: PostRequestBody;
+
+  try {
+    const json = await request.json();
+    requestBody = postRequestBodySchema.parse(json);
+  } catch (_) {
+    return new ChatSDKError('bad_request:api').toResponse();
+  }
+
+  try {
+    const { id, message, selectedChatModel, selectedVisibilityType } =
+      requestBody;
+
+    const session = await auth();
+
+    if (!session?.user) {
+      return new ChatSDKError('unauthorized:chat').toResponse();
+    }
+
+    const userType: UserType = session.user.type;
+
+    const messageCount = await getMessageCountByUserId({
+      id: session.user.id,
+      differenceInHours: 24,
+    });
+
+    if (messageCount > entitlementsByUserType[userType].maxMessagesPerDay) {
+      return new ChatSDKError('rate_limit:chat').toResponse();
+    }
+
+    const chat = await getChatById({ id });
+
+    if (!chat) {
+      const title = await generateTitleFromUserMessage({
+        message,
+      });
+
+      await saveChat({
+        id,
+        userId: session.user.id,
+        title,
+        visibility: selectedVisibilityType,
+      });
+    } else {
+      if (chat.userId !== session.user.id) {
+        return new ChatSDKError('forbidden:chat').toResponse();
+      }
+    }
+
+    const previousMessages = await getMessagesByChatId({ id });
+
+    const messages = appendClientMessage({
+      // @ts-expect-error: todo add type conversion from DBMessage[] to UIMessage[]
+      messages: previousMessages,
+      message,
+    });
+
+    const { longitude, latitude, city, country } = geolocation(request);
+
+    const requestHints: RequestHints = {
+      longitude,
+      latitude,
+      city,
+      country,
+    };
+
+    await saveMessages({
+      messages: [
+        {
+          chatId: id,
+          id: message.id,
+          role: 'user',
+          parts: message.parts,
+          attachments: message.experimental_attachments ?? [],
+          createdAt: new Date(),
+        },
+      ],
+    });
+
+    const streamId = generateUUID();
+    await createStreamId({ streamId, chatId: id });
+
+    const stream = createDataStream({
+      execute: (dataStream) => {
+        const result = streamText({
+          model: myProvider.languageModel(selectedChatModel),
+          system: systemPrompt({ selectedChatModel, requestHints }),
+          messages,
+          maxSteps: 5,
+          experimental_activeTools:
+            selectedChatModel === 'chat-model-reasoning'
+              ? []
+              : [
+                  'getWeather',
+                  'createDocument',
+                  'updateDocument',
+                  'requestSuggestions',
+                ],
+          experimental_transform: smoothStream({ chunking: 'word' }),
+          experimental_generateMessageId: generateUUID,
+          tools: {
+            getWeather,
+            createDocument: createDocument({ session, dataStream }),
+            updateDocument: updateDocument({ session, dataStream }),
+            requestSuggestions: requestSuggestions({
+              session,
+              dataStream,
+            }),
+          },
+          onFinish: async ({ response }) => {
+            if (session.user?.id) {
+              try {
+                const assistantId = getTrailingMessageId({
+                  messages: response.messages.filter(
+                    (message) => message.role === 'assistant',
+                  ),
+                });
+
+                if (!assistantId) {
+                  throw new Error('No assistant message found!');
+                }
+
+                const [, assistantMessage] = appendResponseMessages({
+                  messages: [message],
+                  responseMessages: response.messages,
+                });
+
+                await saveMessages({
+                  messages: [
+                    {
+                      id: assistantId,
+                      chatId: id,
+                      role: assistantMessage.role,
+                      parts: assistantMessage.parts,
+                      attachments:
+                        assistantMessage.experimental_attachments ?? [],
+                      createdAt: new Date(),
+                    },
+                  ],
+                });
+              } catch (_) {
+                console.error('Failed to save chat');
+              }
+            }
+          },
+          experimental_telemetry: {
+            isEnabled: isProductionEnvironment,
+            functionId: 'stream-text',
+          },
+        });
+
+        result.consumeStream();
+
+        result.mergeIntoDataStream(dataStream, {
+          sendReasoning: true,
+        });
+      },
+      onError: () => {
+        return 'Oops, an error occurred!';
+      },
+    });
+
+    const streamContext = getStreamContext();
+
+    if (streamContext) {
+      return new Response(
+        await streamContext.resumableStream(streamId, () => stream),
+      );
+    } else {
+      return new Response(stream);
+    }
+  } catch (error) {
+    if (error instanceof ChatSDKError) {
+      return error.toResponse();
+    }
+  }
+}
+
+export async function GET(request: Request) {
+  const streamContext = getStreamContext();
+  const resumeRequestedAt = new Date();
+
+  if (!streamContext) {
+    return new Response(null, { status: 204 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const chatId = searchParams.get('chatId');
+
+  if (!chatId) {
+    return new ChatSDKError('bad_request:api').toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:chat').toResponse();
+  }
+
+  let chat: Chat;
+
+  try {
+    chat = await getChatById({ id: chatId });
+  } catch {
+    return new ChatSDKError('not_found:chat').toResponse();
+  }
+
+  if (!chat) {
+    return new ChatSDKError('not_found:chat').toResponse();
+  }
+
+  if (chat.visibility === 'private' && chat.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:chat').toResponse();
+  }
+
+  const streamIds = await getStreamIdsByChatId({ chatId });
+
+  if (!streamIds.length) {
+    return new ChatSDKError('not_found:stream').toResponse();
+  }
+
+  const recentStreamId = streamIds.at(-1);
+
+  if (!recentStreamId) {
+    return new ChatSDKError('not_found:stream').toResponse();
+  }
+
+  const emptyDataStream = createDataStream({
+    execute: () => {},
+  });
+
+  const stream = await streamContext.resumableStream(
+    recentStreamId,
+    () => emptyDataStream,
+  );
+
+  /*
+   * For when the generation is streaming during SSR
+   * but the resumable stream has concluded at this point.
+   */
+  if (!stream) {
+    const messages = await getMessagesByChatId({ id: chatId });
+    const mostRecentMessage = messages.at(-1);
+
+    if (!mostRecentMessage) {
+      return new Response(emptyDataStream, { status: 200 });
+    }
+
+    if (mostRecentMessage.role !== 'assistant') {
+      return new Response(emptyDataStream, { status: 200 });
+    }
+
+    const messageCreatedAt = new Date(mostRecentMessage.createdAt);
+
+    if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) > 15) {
+      return new Response(emptyDataStream, { status: 200 });
+    }
+
+    const restoredStream = createDataStream({
+      execute: (buffer) => {
+        buffer.writeData({
+          type: 'append-message',
+          message: JSON.stringify(mostRecentMessage),
+        });
+      },
+    });
+
+    return new Response(restoredStream, { status: 200 });
+  }
+
+  return new Response(stream, { status: 200 });
+}
+
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+
+  if (!id) {
+    return new ChatSDKError('bad_request:api').toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:chat').toResponse();
+  }
+
+  const chat = await getChatById({ id });
+
+  if (chat.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:chat').toResponse();
+  }
+
+  const deletedChat = await deleteChatById({ id });
+
+  return Response.json(deletedChat, { status: 200 });
+}
+
+
+
+================================================
+FILE: app/(chat)/api/chat/schema.ts
+================================================
+import { z } from 'zod';
+
+const textPartSchema = z.object({
+  text: z.string().min(1).max(2000),
+  type: z.enum(['text']),
+});
+
+export const postRequestBodySchema = z.object({
+  id: z.string().uuid(),
+  message: z.object({
+    id: z.string().uuid(),
+    createdAt: z.coerce.date(),
+    role: z.enum(['user']),
+    content: z.string().min(1).max(2000),
+    parts: z.array(textPartSchema),
+    experimental_attachments: z
+      .array(
+        z.object({
+          url: z.string().url(),
+          name: z.string().min(1).max(2000),
+          contentType: z.enum(['image/png', 'image/jpg', 'image/jpeg']),
+        }),
+      )
+      .optional(),
+  }),
+  selectedChatModel: z.enum(['chat-model', 'chat-model-reasoning']),
+  selectedVisibilityType: z.enum(['public', 'private']),
+});
+
+export type PostRequestBody = z.infer<typeof postRequestBodySchema>;
+
+
+
+================================================
+FILE: app/(chat)/api/document/route.ts
+================================================
+import { auth } from '@/app/(auth)/auth';
+import type { ArtifactKind } from '@/components/artifact';
+import {
+  deleteDocumentsByIdAfterTimestamp,
+  getDocumentsById,
+  saveDocument,
+} from '@/lib/db/queries';
+import { ChatSDKError } from '@/lib/errors';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+
+  if (!id) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameter id is missing',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:document').toResponse();
+  }
+
+  const documents = await getDocumentsById({ id });
+
+  const [document] = documents;
+
+  if (!document) {
+    return new ChatSDKError('not_found:document').toResponse();
+  }
+
+  if (document.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:document').toResponse();
+  }
+
+  return Response.json(documents, { status: 200 });
+}
+
+export async function POST(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+
+  if (!id) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameter id is required.',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('not_found:document').toResponse();
+  }
+
+  const {
+    content,
+    title,
+    kind,
+  }: { content: string; title: string; kind: ArtifactKind } =
+    await request.json();
+
+  const documents = await getDocumentsById({ id });
+
+  if (documents.length > 0) {
+    const [document] = documents;
+
+    if (document.userId !== session.user.id) {
+      return new ChatSDKError('forbidden:document').toResponse();
+    }
+  }
+
+  const document = await saveDocument({
+    id,
+    content,
+    title,
+    kind,
+    userId: session.user.id,
+  });
+
+  return Response.json(document, { status: 200 });
+}
+
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+  const timestamp = searchParams.get('timestamp');
+
+  if (!id) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameter id is required.',
+    ).toResponse();
+  }
+
+  if (!timestamp) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameter timestamp is required.',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:document').toResponse();
+  }
+
+  const documents = await getDocumentsById({ id });
+
+  const [document] = documents;
+
+  if (document.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:document').toResponse();
+  }
+
+  const documentsDeleted = await deleteDocumentsByIdAfterTimestamp({
+    id,
+    timestamp: new Date(timestamp),
+  });
+
+  return Response.json(documentsDeleted, { status: 200 });
+}
+
+
+
+================================================
+FILE: app/(chat)/api/files/upload/route.ts
+================================================
+import { put } from '@vercel/blob';
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+
+import { auth } from '@/app/(auth)/auth';
+
+// Use Blob instead of File since File is not available in Node.js environment
+const FileSchema = z.object({
+  file: z
+    .instanceof(Blob)
+    .refine((file) => file.size <= 5 * 1024 * 1024, {
+      message: 'File size should be less than 5MB',
+    })
+    // Update the file type based on the kind of files you want to accept
+    .refine((file) => ['image/jpeg', 'image/png'].includes(file.type), {
+      message: 'File type should be JPEG or PNG',
+    }),
+});
+
+export async function POST(request: Request) {
+  const session = await auth();
+
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (request.body === null) {
+    return new Response('Request body is empty', { status: 400 });
+  }
+
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file') as Blob;
+
+    if (!file) {
+      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    }
+
+    const validatedFile = FileSchema.safeParse({ file });
+
+    if (!validatedFile.success) {
+      const errorMessage = validatedFile.error.errors
+        .map((error) => error.message)
+        .join(', ');
+
+      return NextResponse.json({ error: errorMessage }, { status: 400 });
+    }
+
+    // Get filename from formData since Blob doesn't have name property
+    const filename = (formData.get('file') as File).name;
+    const fileBuffer = await file.arrayBuffer();
+
+    try {
+      const data = await put(`${filename}`, fileBuffer, {
+        access: 'public',
+      });
+
+      return NextResponse.json(data);
+    } catch (error) {
+      return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    }
+  } catch (error) {
+    return NextResponse.json(
+      { error: 'Failed to process request' },
+      { status: 500 },
+    );
+  }
+}
+
+
+
+================================================
+FILE: app/(chat)/api/history/route.ts
+================================================
+import { auth } from '@/app/(auth)/auth';
+import type { NextRequest } from 'next/server';
+import { getChatsByUserId } from '@/lib/db/queries';
+import { ChatSDKError } from '@/lib/errors';
+
+export async function GET(request: NextRequest) {
+  const { searchParams } = request.nextUrl;
+
+  const limit = Number.parseInt(searchParams.get('limit') || '10');
+  const startingAfter = searchParams.get('starting_after');
+  const endingBefore = searchParams.get('ending_before');
+
+  if (startingAfter && endingBefore) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Only one of starting_after or ending_before can be provided.',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:chat').toResponse();
+  }
+
+  const chats = await getChatsByUserId({
+    id: session.user.id,
+    limit,
+    startingAfter,
+    endingBefore,
+  });
+
+  return Response.json(chats);
+}
+
+
+
+================================================
+FILE: app/(chat)/api/suggestions/route.ts
+================================================
+import { auth } from '@/app/(auth)/auth';
+import { getSuggestionsByDocumentId } from '@/lib/db/queries';
+import { ChatSDKError } from '@/lib/errors';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const documentId = searchParams.get('documentId');
+
+  if (!documentId) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameter documentId is required.',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:suggestions').toResponse();
+  }
+
+  const suggestions = await getSuggestionsByDocumentId({
+    documentId,
+  });
+
+  const [suggestion] = suggestions;
+
+  if (!suggestion) {
+    return Response.json([], { status: 200 });
+  }
+
+  if (suggestion.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:api').toResponse();
+  }
+
+  return Response.json(suggestions, { status: 200 });
+}
+
+
+
+================================================
+FILE: app/(chat)/api/vote/route.ts
+================================================
+import { auth } from '@/app/(auth)/auth';
+import { getChatById, getVotesByChatId, voteMessage } from '@/lib/db/queries';
+import { ChatSDKError } from '@/lib/errors';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const chatId = searchParams.get('chatId');
+
+  if (!chatId) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameter chatId is required.',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:vote').toResponse();
+  }
+
+  const chat = await getChatById({ id: chatId });
+
+  if (!chat) {
+    return new ChatSDKError('not_found:chat').toResponse();
+  }
+
+  if (chat.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:vote').toResponse();
+  }
+
+  const votes = await getVotesByChatId({ id: chatId });
+
+  return Response.json(votes, { status: 200 });
+}
+
+export async function PATCH(request: Request) {
+  const {
+    chatId,
+    messageId,
+    type,
+  }: { chatId: string; messageId: string; type: 'up' | 'down' } =
+    await request.json();
+
+  if (!chatId || !messageId || !type) {
+    return new ChatSDKError(
+      'bad_request:api',
+      'Parameters chatId, messageId, and type are required.',
+    ).toResponse();
+  }
+
+  const session = await auth();
+
+  if (!session?.user) {
+    return new ChatSDKError('unauthorized:vote').toResponse();
+  }
+
+  const chat = await getChatById({ id: chatId });
+
+  if (!chat) {
+    return new ChatSDKError('not_found:vote').toResponse();
+  }
+
+  if (chat.userId !== session.user.id) {
+    return new ChatSDKError('forbidden:vote').toResponse();
+  }
+
+  await voteMessage({
+    chatId,
+    messageId,
+    type: type,
+  });
+
+  return new Response('Message voted', { status: 200 });
+}
+
+
+
+================================================
+FILE: app/(chat)/chat/[id]/page.tsx
+================================================
+import { cookies } from 'next/headers';
+import { notFound, redirect } from 'next/navigation';
+
+import { auth } from '@/app/(auth)/auth';
+import { Chat } from '@/components/chat';
+import { getChatById, getMessagesByChatId } from '@/lib/db/queries';
+import { DataStreamHandler } from '@/components/data-stream-handler';
+import { DEFAULT_CHAT_MODEL } from '@/lib/ai/models';
+import type { DBMessage } from '@/lib/db/schema';
+import type { Attachment, UIMessage } from 'ai';
+
+export default async function Page(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const { id } = params;
+  const chat = await getChatById({ id });
+
+  if (!chat) {
+    notFound();
+  }
+
+  const session = await auth();
+
+  if (!session) {
+    redirect('/api/auth/guest');
+  }
+
+  if (chat.visibility === 'private') {
+    if (!session.user) {
+      return notFound();
+    }
+
+    if (session.user.id !== chat.userId) {
+      return notFound();
+    }
+  }
+
+  const messagesFromDb = await getMessagesByChatId({
+    id,
+  });
+
+  function convertToUIMessages(messages: Array<DBMessage>): Array<UIMessage> {
+    return messages.map((message) => ({
+      id: message.id,
+      parts: message.parts as UIMessage['parts'],
+      role: message.role as UIMessage['role'],
+      // Note: content will soon be deprecated in @ai-sdk/react
+      content: '',
+      createdAt: message.createdAt,
+      experimental_attachments:
+        (message.attachments as Array<Attachment>) ?? [],
+    }));
+  }
+
+  const cookieStore = await cookies();
+  const chatModelFromCookie = cookieStore.get('chat-model');
+
+  if (!chatModelFromCookie) {
+    return (
+      <>
+        <Chat
+          id={chat.id}
+          initialMessages={convertToUIMessages(messagesFromDb)}
+          initialChatModel={DEFAULT_CHAT_MODEL}
+          initialVisibilityType={chat.visibility}
+          isReadonly={session?.user?.id !== chat.userId}
+          session={session}
+          autoResume={true}
+        />
+        <DataStreamHandler id={id} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Chat
+        id={chat.id}
+        initialMessages={convertToUIMessages(messagesFromDb)}
+        initialChatModel={chatModelFromCookie.value}
+        initialVisibilityType={chat.visibility}
+        isReadonly={session?.user?.id !== chat.userId}
+        session={session}
+        autoResume={true}
+      />
+      <DataStreamHandler id={id} />
+    </>
+  );
+}
+

@@ -1,0 +1,4636 @@
+
+
+
+
+================================================
+FILE: components/chat.tsx
+================================================
+'use client';
+
+import type { Attachment, UIMessage } from 'ai';
+import { useChat } from '@ai-sdk/react';
+import { useEffect, useState } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
+import { ChatHeader } from '@/components/chat-header';
+import type { Vote } from '@/lib/db/schema';
+import { fetcher, fetchWithErrorHandlers, generateUUID } from '@/lib/utils';
+import { Artifact } from './artifact';
+import { MultimodalInput } from './multimodal-input';
+import { Messages } from './messages';
+import type { VisibilityType } from './visibility-selector';
+import { useArtifactSelector } from '@/hooks/use-artifact';
+import { unstable_serialize } from 'swr/infinite';
+import { getChatHistoryPaginationKey } from './sidebar-history';
+import { toast } from './toast';
+import type { Session } from 'next-auth';
+import { useSearchParams } from 'next/navigation';
+import { useChatVisibility } from '@/hooks/use-chat-visibility';
+import { useAutoResume } from '@/hooks/use-auto-resume';
+import { ChatSDKError } from '@/lib/errors';
+
+export function Chat({
+  id,
+  initialMessages,
+  initialChatModel,
+  initialVisibilityType,
+  isReadonly,
+  session,
+  autoResume,
+}: {
+  id: string;
+  initialMessages: Array<UIMessage>;
+  initialChatModel: string;
+  initialVisibilityType: VisibilityType;
+  isReadonly: boolean;
+  session: Session;
+  autoResume: boolean;
+}) {
+  const { mutate } = useSWRConfig();
+
+  const { visibilityType } = useChatVisibility({
+    chatId: id,
+    initialVisibilityType,
+  });
+
+  const {
+    messages,
+    setMessages,
+    handleSubmit,
+    input,
+    setInput,
+    append,
+    status,
+    stop,
+    reload,
+    experimental_resume,
+    data,
+  } = useChat({
+    id,
+    initialMessages,
+    experimental_throttle: 100,
+    sendExtraMessageFields: true,
+    generateId: generateUUID,
+    fetch: fetchWithErrorHandlers,
+    experimental_prepareRequestBody: (body) => ({
+      id,
+      message: body.messages.at(-1),
+      selectedChatModel: initialChatModel,
+      selectedVisibilityType: visibilityType,
+    }),
+    onFinish: () => {
+      mutate(unstable_serialize(getChatHistoryPaginationKey));
+    },
+    onError: (error) => {
+      if (error instanceof ChatSDKError) {
+        toast({
+          type: 'error',
+          description: error.message,
+        });
+      }
+    },
+  });
+
+  const searchParams = useSearchParams();
+  const query = searchParams.get('query');
+
+  const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
+
+  useEffect(() => {
+    if (query && !hasAppendedQuery) {
+      append({
+        role: 'user',
+        content: query,
+      });
+
+      setHasAppendedQuery(true);
+      window.history.replaceState({}, '', `/chat/${id}`);
+    }
+  }, [query, append, hasAppendedQuery, id]);
+
+  const { data: votes } = useSWR<Array<Vote>>(
+    messages.length >= 2 ? `/api/vote?chatId=${id}` : null,
+    fetcher,
+  );
+
+  const [attachments, setAttachments] = useState<Array<Attachment>>([]);
+  const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
+
+  useAutoResume({
+    autoResume,
+    initialMessages,
+    experimental_resume,
+    data,
+    setMessages,
+  });
+
+  return (
+    <>
+      <div className="flex flex-col min-w-0 h-dvh bg-background">
+        <ChatHeader
+          chatId={id}
+          selectedModelId={initialChatModel}
+          selectedVisibilityType={initialVisibilityType}
+          isReadonly={isReadonly}
+          session={session}
+        />
+
+        <Messages
+          chatId={id}
+          status={status}
+          votes={votes}
+          messages={messages}
+          setMessages={setMessages}
+          reload={reload}
+          isReadonly={isReadonly}
+          isArtifactVisible={isArtifactVisible}
+        />
+
+        <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
+          {!isReadonly && (
+            <MultimodalInput
+              chatId={id}
+              input={input}
+              setInput={setInput}
+              handleSubmit={handleSubmit}
+              status={status}
+              stop={stop}
+              attachments={attachments}
+              setAttachments={setAttachments}
+              messages={messages}
+              setMessages={setMessages}
+              append={append}
+              selectedVisibilityType={visibilityType}
+            />
+          )}
+        </form>
+      </div>
+
+      <Artifact
+        chatId={id}
+        input={input}
+        setInput={setInput}
+        handleSubmit={handleSubmit}
+        status={status}
+        stop={stop}
+        attachments={attachments}
+        setAttachments={setAttachments}
+        append={append}
+        messages={messages}
+        setMessages={setMessages}
+        reload={reload}
+        votes={votes}
+        isReadonly={isReadonly}
+        selectedVisibilityType={visibilityType}
+      />
+    </>
+  );
+}
+
+
+
+================================================
+FILE: components/code-block.tsx
+================================================
+'use client';
+
+interface CodeBlockProps {
+  node: any;
+  inline: boolean;
+  className: string;
+  children: any;
+}
+
+export function CodeBlock({
+  node,
+  inline,
+  className,
+  children,
+  ...props
+}: CodeBlockProps) {
+  if (!inline) {
+    return (
+      <div className="not-prose flex flex-col">
+        <pre
+          {...props}
+          className={`text-sm w-full overflow-x-auto dark:bg-zinc-900 p-4 border border-zinc-200 dark:border-zinc-700 rounded-xl dark:text-zinc-50 text-zinc-900`}
+        >
+          <code className="whitespace-pre-wrap break-words">{children}</code>
+        </pre>
+      </div>
+    );
+  } else {
+    return (
+      <code
+        className={`${className} text-sm bg-zinc-100 dark:bg-zinc-800 py-0.5 px-1 rounded-md`}
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  }
+}
+
+
+
+================================================
+FILE: components/code-editor.tsx
+================================================
+'use client';
+
+import { EditorView } from '@codemirror/view';
+import { EditorState, Transaction } from '@codemirror/state';
+import { python } from '@codemirror/lang-python';
+import { oneDark } from '@codemirror/theme-one-dark';
+import { basicSetup } from 'codemirror';
+import React, { memo, useEffect, useRef } from 'react';
+import { Suggestion } from '@/lib/db/schema';
+
+type EditorProps = {
+  content: string;
+  onSaveContent: (updatedContent: string, debounce: boolean) => void;
+  status: 'streaming' | 'idle';
+  isCurrentVersion: boolean;
+  currentVersionIndex: number;
+  suggestions: Array<Suggestion>;
+};
+
+function PureCodeEditor({ content, onSaveContent, status }: EditorProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<EditorView | null>(null);
+
+  useEffect(() => {
+    if (containerRef.current && !editorRef.current) {
+      const startState = EditorState.create({
+        doc: content,
+        extensions: [basicSetup, python(), oneDark],
+      });
+
+      editorRef.current = new EditorView({
+        state: startState,
+        parent: containerRef.current,
+      });
+    }
+
+    return () => {
+      if (editorRef.current) {
+        editorRef.current.destroy();
+        editorRef.current = null;
+      }
+    };
+    // NOTE: we only want to run this effect once
+    // eslint-disable-next-line
+  }, []);
+
+  useEffect(() => {
+    if (editorRef.current) {
+      const updateListener = EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          const transaction = update.transactions.find(
+            (tr) => !tr.annotation(Transaction.remote),
+          );
+
+          if (transaction) {
+            const newContent = update.state.doc.toString();
+            onSaveContent(newContent, true);
+          }
+        }
+      });
+
+      const currentSelection = editorRef.current.state.selection;
+
+      const newState = EditorState.create({
+        doc: editorRef.current.state.doc,
+        extensions: [basicSetup, python(), oneDark, updateListener],
+        selection: currentSelection,
+      });
+
+      editorRef.current.setState(newState);
+    }
+  }, [onSaveContent]);
+
+  useEffect(() => {
+    if (editorRef.current && content) {
+      const currentContent = editorRef.current.state.doc.toString();
+
+      if (status === 'streaming' || currentContent !== content) {
+        const transaction = editorRef.current.state.update({
+          changes: {
+            from: 0,
+            to: currentContent.length,
+            insert: content,
+          },
+          annotations: [Transaction.remote.of(true)],
+        });
+
+        editorRef.current.dispatch(transaction);
+      }
+    }
+  }, [content, status]);
+
+  return (
+    <div
+      className="relative not-prose w-full pb-[calc(80dvh)] text-sm"
+      ref={containerRef}
+    />
+  );
+}
+
+function areEqual(prevProps: EditorProps, nextProps: EditorProps) {
+  if (prevProps.suggestions !== nextProps.suggestions) return false;
+  if (prevProps.currentVersionIndex !== nextProps.currentVersionIndex)
+    return false;
+  if (prevProps.isCurrentVersion !== nextProps.isCurrentVersion) return false;
+  if (prevProps.status === 'streaming' && nextProps.status === 'streaming')
+    return false;
+  if (prevProps.content !== nextProps.content) return false;
+
+  return true;
+}
+
+export const CodeEditor = memo(PureCodeEditor, areEqual);
+
+
+
+================================================
+FILE: components/console.tsx
+================================================
+import { TerminalWindowIcon, LoaderIcon, CrossSmallIcon } from './icons';
+import { Button } from './ui/button';
+import {
+  Dispatch,
+  SetStateAction,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import { cn } from '@/lib/utils';
+import { useArtifactSelector } from '@/hooks/use-artifact';
+
+export interface ConsoleOutputContent {
+  type: 'text' | 'image';
+  value: string;
+}
+
+export interface ConsoleOutput {
+  id: string;
+  status: 'in_progress' | 'loading_packages' | 'completed' | 'failed';
+  contents: Array<ConsoleOutputContent>;
+}
+
+interface ConsoleProps {
+  consoleOutputs: Array<ConsoleOutput>;
+  setConsoleOutputs: Dispatch<SetStateAction<Array<ConsoleOutput>>>;
+}
+
+export function Console({ consoleOutputs, setConsoleOutputs }: ConsoleProps) {
+  const [height, setHeight] = useState<number>(300);
+  const [isResizing, setIsResizing] = useState(false);
+  const consoleEndRef = useRef<HTMLDivElement>(null);
+
+  const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
+
+  const minHeight = 100;
+  const maxHeight = 800;
+
+  const startResizing = useCallback(() => {
+    setIsResizing(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  const resize = useCallback(
+    (e: MouseEvent) => {
+      if (isResizing) {
+        const newHeight = window.innerHeight - e.clientY;
+        if (newHeight >= minHeight && newHeight <= maxHeight) {
+          setHeight(newHeight);
+        }
+      }
+    },
+    [isResizing],
+  );
+
+  useEffect(() => {
+    window.addEventListener('mousemove', resize);
+    window.addEventListener('mouseup', stopResizing);
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [resize, stopResizing]);
+
+  useEffect(() => {
+    consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [consoleOutputs]);
+
+  useEffect(() => {
+    if (!isArtifactVisible) {
+      setConsoleOutputs([]);
+    }
+  }, [isArtifactVisible, setConsoleOutputs]);
+
+  return consoleOutputs.length > 0 ? (
+    <>
+      <div
+        className="h-2 w-full fixed cursor-ns-resize z-50"
+        onMouseDown={startResizing}
+        style={{ bottom: height - 4 }}
+        role="slider"
+        aria-valuenow={minHeight}
+      />
+
+      <div
+        className={cn(
+          'fixed flex flex-col bottom-0 dark:bg-zinc-900 bg-zinc-50 w-full border-t z-40 overflow-y-scroll overflow-x-hidden dark:border-zinc-700 border-zinc-200',
+          {
+            'select-none': isResizing,
+          },
+        )}
+        style={{ height }}
+      >
+        <div className="flex flex-row justify-between items-center w-full h-fit border-b dark:border-zinc-700 border-zinc-200 px-2 py-1 sticky top-0 z-50 bg-muted">
+          <div className="text-sm pl-2 dark:text-zinc-50 text-zinc-800 flex flex-row gap-3 items-center">
+            <div className="text-muted-foreground">
+              <TerminalWindowIcon />
+            </div>
+            <div>Console</div>
+          </div>
+          <Button
+            variant="ghost"
+            className="size-fit p-1 hover:dark:bg-zinc-700 hover:bg-zinc-200"
+            size="icon"
+            onClick={() => setConsoleOutputs([])}
+          >
+            <CrossSmallIcon />
+          </Button>
+        </div>
+
+        <div>
+          {consoleOutputs.map((consoleOutput, index) => (
+            <div
+              key={consoleOutput.id}
+              className="px-4 py-2 flex flex-row text-sm border-b dark:border-zinc-700 border-zinc-200 dark:bg-zinc-900 bg-zinc-50 font-mono"
+            >
+              <div
+                className={cn('w-12 shrink-0', {
+                  'text-muted-foreground': [
+                    'in_progress',
+                    'loading_packages',
+                  ].includes(consoleOutput.status),
+                  'text-emerald-500': consoleOutput.status === 'completed',
+                  'text-red-400': consoleOutput.status === 'failed',
+                })}
+              >
+                [{index + 1}]
+              </div>
+              {['in_progress', 'loading_packages'].includes(
+                consoleOutput.status,
+              ) ? (
+                <div className="flex flex-row gap-2">
+                  <div className="animate-spin size-fit self-center mb-auto mt-0.5">
+                    <LoaderIcon />
+                  </div>
+                  <div className="text-muted-foreground">
+                    {consoleOutput.status === 'in_progress'
+                      ? 'Initializing...'
+                      : consoleOutput.status === 'loading_packages'
+                        ? consoleOutput.contents.map((content) =>
+                            content.type === 'text' ? content.value : null,
+                          )
+                        : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="dark:text-zinc-50 text-zinc-900 w-full flex flex-col gap-2 overflow-x-scroll">
+                  {consoleOutput.contents.map((content, index) =>
+                    content.type === 'image' ? (
+                      <picture key={`${consoleOutput.id}-${index}`}>
+                        <img
+                          src={content.value}
+                          alt="output"
+                          className="rounded-md max-w-screen-toast-mobile w-full"
+                        />
+                      </picture>
+                    ) : (
+                      <div
+                        key={`${consoleOutput.id}-${index}`}
+                        className="whitespace-pre-line break-words w-full"
+                      >
+                        {content.value}
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+          <div ref={consoleEndRef} />
+        </div>
+      </div>
+    </>
+  ) : null;
+}
+
+
+
+================================================
+FILE: components/create-artifact.tsx
+================================================
+import { Suggestion } from '@/lib/db/schema';
+import { UseChatHelpers } from '@ai-sdk/react';
+import { ComponentType, Dispatch, ReactNode, SetStateAction } from 'react';
+import { DataStreamDelta } from './data-stream-handler';
+import { UIArtifact } from './artifact';
+
+export type ArtifactActionContext<M = any> = {
+  content: string;
+  handleVersionChange: (type: 'next' | 'prev' | 'toggle' | 'latest') => void;
+  currentVersionIndex: number;
+  isCurrentVersion: boolean;
+  mode: 'edit' | 'diff';
+  metadata: M;
+  setMetadata: Dispatch<SetStateAction<M>>;
+};
+
+type ArtifactAction<M = any> = {
+  icon: ReactNode;
+  label?: string;
+  description: string;
+  onClick: (context: ArtifactActionContext<M>) => Promise<void> | void;
+  isDisabled?: (context: ArtifactActionContext<M>) => boolean;
+};
+
+export type ArtifactToolbarContext = {
+  appendMessage: UseChatHelpers['append'];
+};
+
+export type ArtifactToolbarItem = {
+  description: string;
+  icon: ReactNode;
+  onClick: (context: ArtifactToolbarContext) => void;
+};
+
+interface ArtifactContent<M = any> {
+  title: string;
+  content: string;
+  mode: 'edit' | 'diff';
+  isCurrentVersion: boolean;
+  currentVersionIndex: number;
+  status: 'streaming' | 'idle';
+  suggestions: Array<Suggestion>;
+  onSaveContent: (updatedContent: string, debounce: boolean) => void;
+  isInline: boolean;
+  getDocumentContentById: (index: number) => string;
+  isLoading: boolean;
+  metadata: M;
+  setMetadata: Dispatch<SetStateAction<M>>;
+}
+
+interface InitializeParameters<M = any> {
+  documentId: string;
+  setMetadata: Dispatch<SetStateAction<M>>;
+}
+
+type ArtifactConfig<T extends string, M = any> = {
+  kind: T;
+  description: string;
+  content: ComponentType<ArtifactContent<M>>;
+  actions: Array<ArtifactAction<M>>;
+  toolbar: ArtifactToolbarItem[];
+  initialize?: (parameters: InitializeParameters<M>) => void;
+  onStreamPart: (args: {
+    setMetadata: Dispatch<SetStateAction<M>>;
+    setArtifact: Dispatch<SetStateAction<UIArtifact>>;
+    streamPart: DataStreamDelta;
+  }) => void;
+};
+
+export class Artifact<T extends string, M = any> {
+  readonly kind: T;
+  readonly description: string;
+  readonly content: ComponentType<ArtifactContent<M>>;
+  readonly actions: Array<ArtifactAction<M>>;
+  readonly toolbar: ArtifactToolbarItem[];
+  readonly initialize?: (parameters: InitializeParameters) => void;
+  readonly onStreamPart: (args: {
+    setMetadata: Dispatch<SetStateAction<M>>;
+    setArtifact: Dispatch<SetStateAction<UIArtifact>>;
+    streamPart: DataStreamDelta;
+  }) => void;
+
+  constructor(config: ArtifactConfig<T, M>) {
+    this.kind = config.kind;
+    this.description = config.description;
+    this.content = config.content;
+    this.actions = config.actions || [];
+    this.toolbar = config.toolbar || [];
+    this.initialize = config.initialize || (async () => ({}));
+    this.onStreamPart = config.onStreamPart;
+  }
+}
+
+
+
+================================================
+FILE: components/data-stream-handler.tsx
+================================================
+'use client';
+
+import { useChat } from '@ai-sdk/react';
+import { useEffect, useRef } from 'react';
+import { artifactDefinitions, ArtifactKind } from './artifact';
+import { Suggestion } from '@/lib/db/schema';
+import { initialArtifactData, useArtifact } from '@/hooks/use-artifact';
+
+export type DataStreamDelta = {
+  type:
+    | 'text-delta'
+    | 'code-delta'
+    | 'sheet-delta'
+    | 'image-delta'
+    | 'title'
+    | 'id'
+    | 'suggestion'
+    | 'clear'
+    | 'finish'
+    | 'kind';
+  content: string | Suggestion;
+};
+
+export function DataStreamHandler({ id }: { id: string }) {
+  const { data: dataStream } = useChat({ id });
+  const { artifact, setArtifact, setMetadata } = useArtifact();
+  const lastProcessedIndex = useRef(-1);
+
+  useEffect(() => {
+    if (!dataStream?.length) return;
+
+    const newDeltas = dataStream.slice(lastProcessedIndex.current + 1);
+    lastProcessedIndex.current = dataStream.length - 1;
+
+    (newDeltas as DataStreamDelta[]).forEach((delta: DataStreamDelta) => {
+      const artifactDefinition = artifactDefinitions.find(
+        (artifactDefinition) => artifactDefinition.kind === artifact.kind,
+      );
+
+      if (artifactDefinition?.onStreamPart) {
+        artifactDefinition.onStreamPart({
+          streamPart: delta,
+          setArtifact,
+          setMetadata,
+        });
+      }
+
+      setArtifact((draftArtifact) => {
+        if (!draftArtifact) {
+          return { ...initialArtifactData, status: 'streaming' };
+        }
+
+        switch (delta.type) {
+          case 'id':
+            return {
+              ...draftArtifact,
+              documentId: delta.content as string,
+              status: 'streaming',
+            };
+
+          case 'title':
+            return {
+              ...draftArtifact,
+              title: delta.content as string,
+              status: 'streaming',
+            };
+
+          case 'kind':
+            return {
+              ...draftArtifact,
+              kind: delta.content as ArtifactKind,
+              status: 'streaming',
+            };
+
+          case 'clear':
+            return {
+              ...draftArtifact,
+              content: '',
+              status: 'streaming',
+            };
+
+          case 'finish':
+            return {
+              ...draftArtifact,
+              status: 'idle',
+            };
+
+          default:
+            return draftArtifact;
+        }
+      });
+    });
+  }, [dataStream, setArtifact, setMetadata, artifact]);
+
+  return null;
+}
+
+
+
+================================================
+FILE: components/diffview.tsx
+================================================
+import OrderedMap from 'orderedmap';
+import {
+  Schema,
+  type Node as ProsemirrorNode,
+  type MarkSpec,
+  DOMParser,
+} from 'prosemirror-model';
+import { schema } from 'prosemirror-schema-basic';
+import { addListNodes } from 'prosemirror-schema-list';
+import { EditorState } from 'prosemirror-state';
+import { EditorView } from 'prosemirror-view';
+import React, { useEffect, useRef } from 'react';
+import { renderToString } from 'react-dom/server';
+import ReactMarkdown from 'react-markdown';
+
+import { diffEditor, DiffType } from '@/lib/editor/diff';
+
+const diffSchema = new Schema({
+  nodes: addListNodes(schema.spec.nodes, 'paragraph block*', 'block'),
+  marks: OrderedMap.from({
+    ...schema.spec.marks.toObject(),
+    diffMark: {
+      attrs: { type: { default: '' } },
+      toDOM(mark) {
+        let className = '';
+
+        switch (mark.attrs.type) {
+          case DiffType.Inserted:
+            className =
+              'bg-green-100 text-green-700 dark:bg-green-500/70 dark:text-green-300';
+            break;
+          case DiffType.Deleted:
+            className =
+              'bg-red-100 line-through text-red-600 dark:bg-red-500/70 dark:text-red-300';
+            break;
+          default:
+            className = '';
+        }
+        return ['span', { class: className }, 0];
+      },
+    } as MarkSpec,
+  }),
+});
+
+function computeDiff(oldDoc: ProsemirrorNode, newDoc: ProsemirrorNode) {
+  return diffEditor(diffSchema, oldDoc.toJSON(), newDoc.toJSON());
+}
+
+type DiffEditorProps = {
+  oldContent: string;
+  newContent: string;
+};
+
+export const DiffView = ({ oldContent, newContent }: DiffEditorProps) => {
+  const editorRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+
+  useEffect(() => {
+    if (editorRef.current && !viewRef.current) {
+      const parser = DOMParser.fromSchema(diffSchema);
+
+      const oldHtmlContent = renderToString(
+        <ReactMarkdown>{oldContent}</ReactMarkdown>,
+      );
+      const newHtmlContent = renderToString(
+        <ReactMarkdown>{newContent}</ReactMarkdown>,
+      );
+
+      const oldContainer = document.createElement('div');
+      oldContainer.innerHTML = oldHtmlContent;
+
+      const newContainer = document.createElement('div');
+      newContainer.innerHTML = newHtmlContent;
+
+      const oldDoc = parser.parse(oldContainer);
+      const newDoc = parser.parse(newContainer);
+
+      const diffedDoc = computeDiff(oldDoc, newDoc);
+
+      const state = EditorState.create({
+        doc: diffedDoc,
+        plugins: [],
+      });
+
+      viewRef.current = new EditorView(editorRef.current, {
+        state,
+        editable: () => false,
+      });
+    }
+
+    return () => {
+      if (viewRef.current) {
+        viewRef.current.destroy();
+        viewRef.current = null;
+      }
+    };
+  }, [oldContent, newContent]);
+
+  return <div className="diff-editor" ref={editorRef} />;
+};
+
+
+
+================================================
+FILE: components/document-preview.tsx
+================================================
+'use client';
+
+import {
+  memo,
+  MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react';
+import { ArtifactKind, UIArtifact } from './artifact';
+import { FileIcon, FullscreenIcon, ImageIcon, LoaderIcon } from './icons';
+import { cn, fetcher } from '@/lib/utils';
+import { Document } from '@/lib/db/schema';
+import { InlineDocumentSkeleton } from './document-skeleton';
+import useSWR from 'swr';
+import { Editor } from './text-editor';
+import { DocumentToolCall, DocumentToolResult } from './document';
+import { CodeEditor } from './code-editor';
+import { useArtifact } from '@/hooks/use-artifact';
+import equal from 'fast-deep-equal';
+import { SpreadsheetEditor } from './sheet-editor';
+import { ImageEditor } from './image-editor';
+
+interface DocumentPreviewProps {
+  isReadonly: boolean;
+  result?: any;
+  args?: any;
+}
+
+export function DocumentPreview({
+  isReadonly,
+  result,
+  args,
+}: DocumentPreviewProps) {
+  const { artifact, setArtifact } = useArtifact();
+
+  const { data: documents, isLoading: isDocumentsFetching } = useSWR<
+    Array<Document>
+  >(result ? `/api/document?id=${result.id}` : null, fetcher);
+
+  const previewDocument = useMemo(() => documents?.[0], [documents]);
+  const hitboxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const boundingBox = hitboxRef.current?.getBoundingClientRect();
+
+    if (artifact.documentId && boundingBox) {
+      setArtifact((artifact) => ({
+        ...artifact,
+        boundingBox: {
+          left: boundingBox.x,
+          top: boundingBox.y,
+          width: boundingBox.width,
+          height: boundingBox.height,
+        },
+      }));
+    }
+  }, [artifact.documentId, setArtifact]);
+
+  if (artifact.isVisible) {
+    if (result) {
+      return (
+        <DocumentToolResult
+          type="create"
+          result={{ id: result.id, title: result.title, kind: result.kind }}
+          isReadonly={isReadonly}
+        />
+      );
+    }
+
+    if (args) {
+      return (
+        <DocumentToolCall
+          type="create"
+          args={{ title: args.title }}
+          isReadonly={isReadonly}
+        />
+      );
+    }
+  }
+
+  if (isDocumentsFetching) {
+    return <LoadingSkeleton artifactKind={result.kind ?? args.kind} />;
+  }
+
+  const document: Document | null = previewDocument
+    ? previewDocument
+    : artifact.status === 'streaming'
+      ? {
+          title: artifact.title,
+          kind: artifact.kind,
+          content: artifact.content,
+          id: artifact.documentId,
+          createdAt: new Date(),
+          userId: 'noop',
+        }
+      : null;
+
+  if (!document) return <LoadingSkeleton artifactKind={artifact.kind} />;
+
+  return (
+    <div className="relative w-full cursor-pointer">
+      <HitboxLayer
+        hitboxRef={hitboxRef}
+        result={result}
+        setArtifact={setArtifact}
+      />
+      <DocumentHeader
+        title={document.title}
+        kind={document.kind}
+        isStreaming={artifact.status === 'streaming'}
+      />
+      <DocumentContent document={document} />
+    </div>
+  );
+}
+
+const LoadingSkeleton = ({ artifactKind }: { artifactKind: ArtifactKind }) => (
+  <div className="w-full">
+    <div className="p-4 border rounded-t-2xl flex flex-row gap-2 items-center justify-between dark:bg-muted h-[57px] dark:border-zinc-700 border-b-0">
+      <div className="flex flex-row items-center gap-3">
+        <div className="text-muted-foreground">
+          <div className="animate-pulse rounded-md size-4 bg-muted-foreground/20" />
+        </div>
+        <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-24" />
+      </div>
+      <div>
+        <FullscreenIcon />
+      </div>
+    </div>
+    {artifactKind === 'image' ? (
+      <div className="overflow-y-scroll border rounded-b-2xl bg-muted border-t-0 dark:border-zinc-700">
+        <div className="animate-pulse h-[257px] bg-muted-foreground/20 w-full" />
+      </div>
+    ) : (
+      <div className="overflow-y-scroll border rounded-b-2xl p-8 pt-4 bg-muted border-t-0 dark:border-zinc-700">
+        <InlineDocumentSkeleton />
+      </div>
+    )}
+  </div>
+);
+
+const PureHitboxLayer = ({
+  hitboxRef,
+  result,
+  setArtifact,
+}: {
+  hitboxRef: React.RefObject<HTMLDivElement>;
+  result: any;
+  setArtifact: (
+    updaterFn: UIArtifact | ((currentArtifact: UIArtifact) => UIArtifact),
+  ) => void;
+}) => {
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      const boundingBox = event.currentTarget.getBoundingClientRect();
+
+      setArtifact((artifact) =>
+        artifact.status === 'streaming'
+          ? { ...artifact, isVisible: true }
+          : {
+              ...artifact,
+              title: result.title,
+              documentId: result.id,
+              kind: result.kind,
+              isVisible: true,
+              boundingBox: {
+                left: boundingBox.x,
+                top: boundingBox.y,
+                width: boundingBox.width,
+                height: boundingBox.height,
+              },
+            },
+      );
+    },
+    [setArtifact, result],
+  );
+
+  return (
+    <div
+      className="size-full absolute top-0 left-0 rounded-xl z-10"
+      ref={hitboxRef}
+      onClick={handleClick}
+      role="presentation"
+      aria-hidden="true"
+    >
+      <div className="w-full p-4 flex justify-end items-center">
+        <div className="absolute right-[9px] top-[13px] p-2 hover:dark:bg-zinc-700 rounded-md hover:bg-zinc-100">
+          <FullscreenIcon />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const HitboxLayer = memo(PureHitboxLayer, (prevProps, nextProps) => {
+  if (!equal(prevProps.result, nextProps.result)) return false;
+  return true;
+});
+
+const PureDocumentHeader = ({
+  title,
+  kind,
+  isStreaming,
+}: {
+  title: string;
+  kind: ArtifactKind;
+  isStreaming: boolean;
+}) => (
+  <div className="p-4 border rounded-t-2xl flex flex-row gap-2 items-start sm:items-center justify-between dark:bg-muted border-b-0 dark:border-zinc-700">
+    <div className="flex flex-row items-start sm:items-center gap-3">
+      <div className="text-muted-foreground">
+        {isStreaming ? (
+          <div className="animate-spin">
+            <LoaderIcon />
+          </div>
+        ) : kind === 'image' ? (
+          <ImageIcon />
+        ) : (
+          <FileIcon />
+        )}
+      </div>
+      <div className="-translate-y-1 sm:translate-y-0 font-medium">{title}</div>
+    </div>
+    <div className="w-8" />
+  </div>
+);
+
+const DocumentHeader = memo(PureDocumentHeader, (prevProps, nextProps) => {
+  if (prevProps.title !== nextProps.title) return false;
+  if (prevProps.isStreaming !== nextProps.isStreaming) return false;
+
+  return true;
+});
+
+const DocumentContent = ({ document }: { document: Document }) => {
+  const { artifact } = useArtifact();
+
+  const containerClassName = cn(
+    'h-[257px] overflow-y-scroll border rounded-b-2xl dark:bg-muted border-t-0 dark:border-zinc-700',
+    {
+      'p-4 sm:px-14 sm:py-16': document.kind === 'text',
+      'p-0': document.kind === 'code',
+    },
+  );
+
+  const commonProps = {
+    content: document.content ?? '',
+    isCurrentVersion: true,
+    currentVersionIndex: 0,
+    status: artifact.status,
+    saveContent: () => {},
+    suggestions: [],
+  };
+
+  return (
+    <div className={containerClassName}>
+      {document.kind === 'text' ? (
+        <Editor {...commonProps} onSaveContent={() => {}} />
+      ) : document.kind === 'code' ? (
+        <div className="flex flex-1 relative w-full">
+          <div className="absolute inset-0">
+            <CodeEditor {...commonProps} onSaveContent={() => {}} />
+          </div>
+        </div>
+      ) : document.kind === 'sheet' ? (
+        <div className="flex flex-1 relative size-full p-4">
+          <div className="absolute inset-0">
+            <SpreadsheetEditor {...commonProps} />
+          </div>
+        </div>
+      ) : document.kind === 'image' ? (
+        <ImageEditor
+          title={document.title}
+          content={document.content ?? ''}
+          isCurrentVersion={true}
+          currentVersionIndex={0}
+          status={artifact.status}
+          isInline={true}
+        />
+      ) : null}
+    </div>
+  );
+};
+
+
+
+================================================
+FILE: components/document-skeleton.tsx
+================================================
+'use client';
+
+import { ArtifactKind } from './artifact';
+
+export const DocumentSkeleton = ({
+  artifactKind,
+}: {
+  artifactKind: ArtifactKind;
+}) => {
+  return artifactKind === 'image' ? (
+    <div className="flex flex-col gap-4 w-full justify-center items-center h-[calc(100dvh-60px)]">
+      <div className="animate-pulse rounded-lg bg-muted-foreground/20 size-96" />
+    </div>
+  ) : (
+    <div className="flex flex-col gap-4 w-full">
+      <div className="animate-pulse rounded-lg h-12 bg-muted-foreground/20 w-1/2" />
+      <div className="animate-pulse rounded-lg h-5 bg-muted-foreground/20 w-full" />
+      <div className="animate-pulse rounded-lg h-5 bg-muted-foreground/20 w-full" />
+      <div className="animate-pulse rounded-lg h-5 bg-muted-foreground/20 w-1/3" />
+      <div className="animate-pulse rounded-lg h-5 bg-transparent w-52" />
+      <div className="animate-pulse rounded-lg h-8 bg-muted-foreground/20 w-52" />
+      <div className="animate-pulse rounded-lg h-5 bg-muted-foreground/20 w-2/3" />
+    </div>
+  );
+};
+
+export const InlineDocumentSkeleton = () => {
+  return (
+    <div className="flex flex-col gap-4 w-full">
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-48" />
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-3/4" />
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-1/2" />
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-64" />
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-40" />
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-36" />
+      <div className="animate-pulse rounded-lg h-4 bg-muted-foreground/20 w-64" />
+    </div>
+  );
+};
+
+
+
+================================================
+FILE: components/document.tsx
+================================================
+import { memo } from 'react';
+
+import type { ArtifactKind } from './artifact';
+import { FileIcon, LoaderIcon, MessageIcon, PencilEditIcon } from './icons';
+import { toast } from 'sonner';
+import { useArtifact } from '@/hooks/use-artifact';
+
+const getActionText = (
+  type: 'create' | 'update' | 'request-suggestions',
+  tense: 'present' | 'past',
+) => {
+  switch (type) {
+    case 'create':
+      return tense === 'present' ? 'Creating' : 'Created';
+    case 'update':
+      return tense === 'present' ? 'Updating' : 'Updated';
+    case 'request-suggestions':
+      return tense === 'present'
+        ? 'Adding suggestions'
+        : 'Added suggestions to';
+    default:
+      return null;
+  }
+};
+
+interface DocumentToolResultProps {
+  type: 'create' | 'update' | 'request-suggestions';
+  result: { id: string; title: string; kind: ArtifactKind };
+  isReadonly: boolean;
+}
+
+function PureDocumentToolResult({
+  type,
+  result,
+  isReadonly,
+}: DocumentToolResultProps) {
+  const { setArtifact } = useArtifact();
+
+  return (
+    <button
+      type="button"
+      className="bg-background cursor-pointer border py-2 px-3 rounded-xl w-fit flex flex-row gap-3 items-start"
+      onClick={(event) => {
+        if (isReadonly) {
+          toast.error(
+            'Viewing files in shared chats is currently not supported.',
+          );
+          return;
+        }
+
+        const rect = event.currentTarget.getBoundingClientRect();
+
+        const boundingBox = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        };
+
+        setArtifact({
+          documentId: result.id,
+          kind: result.kind,
+          content: '',
+          title: result.title,
+          isVisible: true,
+          status: 'idle',
+          boundingBox,
+        });
+      }}
+    >
+      <div className="text-muted-foreground mt-1">
+        {type === 'create' ? (
+          <FileIcon />
+        ) : type === 'update' ? (
+          <PencilEditIcon />
+        ) : type === 'request-suggestions' ? (
+          <MessageIcon />
+        ) : null}
+      </div>
+      <div className="text-left">
+        {`${getActionText(type, 'past')} "${result.title}"`}
+      </div>
+    </button>
+  );
+}
+
+export const DocumentToolResult = memo(PureDocumentToolResult, () => true);
+
+interface DocumentToolCallProps {
+  type: 'create' | 'update' | 'request-suggestions';
+  args: { title: string };
+  isReadonly: boolean;
+}
+
+function PureDocumentToolCall({
+  type,
+  args,
+  isReadonly,
+}: DocumentToolCallProps) {
+  const { setArtifact } = useArtifact();
+
+  return (
+    <button
+      type="button"
+      className="cursor pointer w-fit border py-2 px-3 rounded-xl flex flex-row items-start justify-between gap-3"
+      onClick={(event) => {
+        if (isReadonly) {
+          toast.error(
+            'Viewing files in shared chats is currently not supported.',
+          );
+          return;
+        }
+
+        const rect = event.currentTarget.getBoundingClientRect();
+
+        const boundingBox = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        };
+
+        setArtifact((currentArtifact) => ({
+          ...currentArtifact,
+          isVisible: true,
+          boundingBox,
+        }));
+      }}
+    >
+      <div className="flex flex-row gap-3 items-start">
+        <div className="text-zinc-500 mt-1">
+          {type === 'create' ? (
+            <FileIcon />
+          ) : type === 'update' ? (
+            <PencilEditIcon />
+          ) : type === 'request-suggestions' ? (
+            <MessageIcon />
+          ) : null}
+        </div>
+
+        <div className="text-left">
+          {`${getActionText(type, 'present')} ${args.title ? `"${args.title}"` : ''}`}
+        </div>
+      </div>
+
+      <div className="animate-spin mt-1">{<LoaderIcon />}</div>
+    </button>
+  );
+}
+
+export const DocumentToolCall = memo(PureDocumentToolCall, () => true);
+
+
+
+================================================
+FILE: components/greeting.tsx
+================================================
+import { motion } from 'framer-motion';
+
+export const Greeting = () => {
+  return (
+    <div
+      key="overview"
+      className="max-w-3xl mx-auto md:mt-20 px-8 size-full flex flex-col justify-center"
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ delay: 0.5 }}
+        className="text-2xl font-semibold"
+      >
+        Hello there!
+      </motion.div>
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ delay: 0.6 }}
+        className="text-2xl text-zinc-500"
+      >
+        How can I help you today?
+      </motion.div>
+    </div>
+  );
+};
+
+
+
+
+
+
+
+================================================
+FILE: components/image-editor.tsx
+================================================
+import { LoaderIcon } from './icons';
+import cn from 'classnames';
+
+interface ImageEditorProps {
+  title: string;
+  content: string;
+  isCurrentVersion: boolean;
+  currentVersionIndex: number;
+  status: string;
+  isInline: boolean;
+}
+
+export function ImageEditor({
+  title,
+  content,
+  status,
+  isInline,
+}: ImageEditorProps) {
+  return (
+    <div
+      className={cn('flex flex-row items-center justify-center w-full', {
+        'h-[calc(100dvh-60px)]': !isInline,
+        'h-[200px]': isInline,
+      })}
+    >
+      {status === 'streaming' ? (
+        <div className="flex flex-row gap-4 items-center">
+          {!isInline && (
+            <div className="animate-spin">
+              <LoaderIcon />
+            </div>
+          )}
+          <div>Generating Image...</div>
+        </div>
+      ) : (
+        <picture>
+          <img
+            className={cn('w-full h-fit max-w-[800px]', {
+              'p-0 md:p-20': !isInline,
+            })}
+            src={`data:image/png;base64,${content}`}
+            alt={title}
+          />
+        </picture>
+      )}
+    </div>
+  );
+}
+
+
+
+================================================
+FILE: components/markdown.tsx
+================================================
+import Link from 'next/link';
+import React, { memo } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { CodeBlock } from './code-block';
+
+const components: Partial<Components> = {
+  // @ts-expect-error
+  code: CodeBlock,
+  pre: ({ children }) => <>{children}</>,
+  ol: ({ node, children, ...props }) => {
+    return (
+      <ol className="list-decimal list-outside ml-4" {...props}>
+        {children}
+      </ol>
+    );
+  },
+  li: ({ node, children, ...props }) => {
+    return (
+      <li className="py-1" {...props}>
+        {children}
+      </li>
+    );
+  },
+  ul: ({ node, children, ...props }) => {
+    return (
+      <ul className="list-decimal list-outside ml-4" {...props}>
+        {children}
+      </ul>
+    );
+  },
+  strong: ({ node, children, ...props }) => {
+    return (
+      <span className="font-semibold" {...props}>
+        {children}
+      </span>
+    );
+  },
+  a: ({ node, children, ...props }) => {
+    return (
+      // @ts-expect-error
+      <Link
+        className="text-blue-500 hover:underline"
+        target="_blank"
+        rel="noreferrer"
+        {...props}
+      >
+        {children}
+      </Link>
+    );
+  },
+  h1: ({ node, children, ...props }) => {
+    return (
+      <h1 className="text-3xl font-semibold mt-6 mb-2" {...props}>
+        {children}
+      </h1>
+    );
+  },
+  h2: ({ node, children, ...props }) => {
+    return (
+      <h2 className="text-2xl font-semibold mt-6 mb-2" {...props}>
+        {children}
+      </h2>
+    );
+  },
+  h3: ({ node, children, ...props }) => {
+    return (
+      <h3 className="text-xl font-semibold mt-6 mb-2" {...props}>
+        {children}
+      </h3>
+    );
+  },
+  h4: ({ node, children, ...props }) => {
+    return (
+      <h4 className="text-lg font-semibold mt-6 mb-2" {...props}>
+        {children}
+      </h4>
+    );
+  },
+  h5: ({ node, children, ...props }) => {
+    return (
+      <h5 className="text-base font-semibold mt-6 mb-2" {...props}>
+        {children}
+      </h5>
+    );
+  },
+  h6: ({ node, children, ...props }) => {
+    return (
+      <h6 className="text-sm font-semibold mt-6 mb-2" {...props}>
+        {children}
+      </h6>
+    );
+  },
+};
+
+const remarkPlugins = [remarkGfm];
+
+const NonMemoizedMarkdown = ({ children }: { children: string }) => {
+  return (
+    <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
+      {children}
+    </ReactMarkdown>
+  );
+};
+
+export const Markdown = memo(
+  NonMemoizedMarkdown,
+  (prevProps, nextProps) => prevProps.children === nextProps.children,
+);
+
+
+
+================================================
+FILE: components/message-actions.tsx
+================================================
+import type { Message } from 'ai';
+import { useSWRConfig } from 'swr';
+import { useCopyToClipboard } from 'usehooks-ts';
+
+import type { Vote } from '@/lib/db/schema';
+
+import { CopyIcon, ThumbDownIcon, ThumbUpIcon } from './icons';
+import { Button } from './ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from './ui/tooltip';
+import { memo } from 'react';
+import equal from 'fast-deep-equal';
+import { toast } from 'sonner';
+
+export function PureMessageActions({
+  chatId,
+  message,
+  vote,
+  isLoading,
+}: {
+  chatId: string;
+  message: Message;
+  vote: Vote | undefined;
+  isLoading: boolean;
+}) {
+  const { mutate } = useSWRConfig();
+  const [_, copyToClipboard] = useCopyToClipboard();
+
+  if (isLoading) return null;
+  if (message.role === 'user') return null;
+
+  return (
+    <TooltipProvider delayDuration={0}>
+      <div className="flex flex-row gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              className="py-1 px-2 h-fit text-muted-foreground"
+              variant="outline"
+              onClick={async () => {
+                const textFromParts = message.parts
+                  ?.filter((part) => part.type === 'text')
+                  .map((part) => part.text)
+                  .join('\n')
+                  .trim();
+
+                if (!textFromParts) {
+                  toast.error("There's no text to copy!");
+                  return;
+                }
+
+                await copyToClipboard(textFromParts);
+                toast.success('Copied to clipboard!');
+              }}
+            >
+              <CopyIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Copy</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              data-testid="message-upvote"
+              className="py-1 px-2 h-fit text-muted-foreground !pointer-events-auto"
+              disabled={vote?.isUpvoted}
+              variant="outline"
+              onClick={async () => {
+                const upvote = fetch('/api/vote', {
+                  method: 'PATCH',
+                  body: JSON.stringify({
+                    chatId,
+                    messageId: message.id,
+                    type: 'up',
+                  }),
+                });
+
+                toast.promise(upvote, {
+                  loading: 'Upvoting Response...',
+                  success: () => {
+                    mutate<Array<Vote>>(
+                      `/api/vote?chatId=${chatId}`,
+                      (currentVotes) => {
+                        if (!currentVotes) return [];
+
+                        const votesWithoutCurrent = currentVotes.filter(
+                          (vote) => vote.messageId !== message.id,
+                        );
+
+                        return [
+                          ...votesWithoutCurrent,
+                          {
+                            chatId,
+                            messageId: message.id,
+                            isUpvoted: true,
+                          },
+                        ];
+                      },
+                      { revalidate: false },
+                    );
+
+                    return 'Upvoted Response!';
+                  },
+                  error: 'Failed to upvote response.',
+                });
+              }}
+            >
+              <ThumbUpIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Upvote Response</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              data-testid="message-downvote"
+              className="py-1 px-2 h-fit text-muted-foreground !pointer-events-auto"
+              variant="outline"
+              disabled={vote && !vote.isUpvoted}
+              onClick={async () => {
+                const downvote = fetch('/api/vote', {
+                  method: 'PATCH',
+                  body: JSON.stringify({
+                    chatId,
+                    messageId: message.id,
+                    type: 'down',
+                  }),
+                });
+
+                toast.promise(downvote, {
+                  loading: 'Downvoting Response...',
+                  success: () => {
+                    mutate<Array<Vote>>(
+                      `/api/vote?chatId=${chatId}`,
+                      (currentVotes) => {
+                        if (!currentVotes) return [];
+
+                        const votesWithoutCurrent = currentVotes.filter(
+                          (vote) => vote.messageId !== message.id,
+                        );
+
+                        return [
+                          ...votesWithoutCurrent,
+                          {
+                            chatId,
+                            messageId: message.id,
+                            isUpvoted: false,
+                          },
+                        ];
+                      },
+                      { revalidate: false },
+                    );
+
+                    return 'Downvoted Response!';
+                  },
+                  error: 'Failed to downvote response.',
+                });
+              }}
+            >
+              <ThumbDownIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Downvote Response</TooltipContent>
+        </Tooltip>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+export const MessageActions = memo(
+  PureMessageActions,
+  (prevProps, nextProps) => {
+    if (!equal(prevProps.vote, nextProps.vote)) return false;
+    if (prevProps.isLoading !== nextProps.isLoading) return false;
+
+    return true;
+  },
+);
+
+
+
+================================================
+FILE: components/message-editor.tsx
+================================================
+'use client';
+
+import { ChatRequestOptions, Message } from 'ai';
+import { Button } from './ui/button';
+import { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react';
+import { Textarea } from './ui/textarea';
+import { deleteTrailingMessages } from '@/app/(chat)/actions';
+import { UseChatHelpers } from '@ai-sdk/react';
+
+export type MessageEditorProps = {
+  message: Message;
+  setMode: Dispatch<SetStateAction<'view' | 'edit'>>;
+  setMessages: UseChatHelpers['setMessages'];
+  reload: UseChatHelpers['reload'];
+};
+
+export function MessageEditor({
+  message,
+  setMode,
+  setMessages,
+  reload,
+}: MessageEditorProps) {
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  const [draftContent, setDraftContent] = useState<string>(message.content);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      adjustHeight();
+    }
+  }, []);
+
+  const adjustHeight = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight + 2}px`;
+    }
+  };
+
+  const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setDraftContent(event.target.value);
+    adjustHeight();
+  };
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <Textarea
+        data-testid="message-editor"
+        ref={textareaRef}
+        className="bg-transparent outline-none overflow-hidden resize-none !text-base rounded-xl w-full"
+        value={draftContent}
+        onChange={handleInput}
+      />
+
+      <div className="flex flex-row gap-2 justify-end">
+        <Button
+          variant="outline"
+          className="h-fit py-2 px-3"
+          onClick={() => {
+            setMode('view');
+          }}
+        >
+          Cancel
+        </Button>
+        <Button
+          data-testid="message-editor-send-button"
+          variant="default"
+          className="h-fit py-2 px-3"
+          disabled={isSubmitting}
+          onClick={async () => {
+            setIsSubmitting(true);
+
+            await deleteTrailingMessages({
+              id: message.id,
+            });
+
+            // @ts-expect-error todo: support UIMessage in setMessages
+            setMessages((messages) => {
+              const index = messages.findIndex((m) => m.id === message.id);
+
+              if (index !== -1) {
+                const updatedMessage = {
+                  ...message,
+                  content: draftContent,
+                  parts: [{ type: 'text', text: draftContent }],
+                };
+
+                return [...messages.slice(0, index), updatedMessage];
+              }
+
+              return messages;
+            });
+
+            setMode('view');
+            reload();
+          }}
+        >
+          {isSubmitting ? 'Sending...' : 'Send'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+
+================================================
+FILE: components/message-reasoning.tsx
+================================================
+'use client';
+
+import { useState } from 'react';
+import { ChevronDownIcon, LoaderIcon } from './icons';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Markdown } from './markdown';
+
+interface MessageReasoningProps {
+  isLoading: boolean;
+  reasoning: string;
+}
+
+export function MessageReasoning({
+  isLoading,
+  reasoning,
+}: MessageReasoningProps) {
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  const variants = {
+    collapsed: {
+      height: 0,
+      opacity: 0,
+      marginTop: 0,
+      marginBottom: 0,
+    },
+    expanded: {
+      height: 'auto',
+      opacity: 1,
+      marginTop: '1rem',
+      marginBottom: '0.5rem',
+    },
+  };
+
+  return (
+    <div className="flex flex-col">
+      {isLoading ? (
+        <div className="flex flex-row gap-2 items-center">
+          <div className="font-medium">Reasoning</div>
+          <div className="animate-spin">
+            <LoaderIcon />
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-row gap-2 items-center">
+          <div className="font-medium">Reasoned for a few seconds</div>
+          <button
+            data-testid="message-reasoning-toggle"
+            type="button"
+            className="cursor-pointer"
+            onClick={() => {
+              setIsExpanded(!isExpanded);
+            }}
+          >
+            <ChevronDownIcon />
+          </button>
+        </div>
+      )}
+
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.div
+            data-testid="message-reasoning"
+            key="content"
+            initial="collapsed"
+            animate="expanded"
+            exit="collapsed"
+            variants={variants}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            style={{ overflow: 'hidden' }}
+            className="pl-4 text-zinc-600 dark:text-zinc-400 border-l flex flex-col gap-4"
+          >
+            <Markdown>{reasoning}</Markdown>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+
+
+================================================
+FILE: components/message.tsx
+================================================
+'use client';
+
+import type { UIMessage } from 'ai';
+import cx from 'classnames';
+import { AnimatePresence, motion } from 'framer-motion';
+import { memo, useState } from 'react';
+import type { Vote } from '@/lib/db/schema';
+import { DocumentToolCall, DocumentToolResult } from './document';
+import { PencilEditIcon, SparklesIcon } from './icons';
+import { Markdown } from './markdown';
+import { MessageActions } from './message-actions';
+import { PreviewAttachment } from './preview-attachment';
+import { Weather } from './weather';
+import equal from 'fast-deep-equal';
+import { cn, sanitizeText } from '@/lib/utils';
+import { Button } from './ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import { MessageEditor } from './message-editor';
+import { DocumentPreview } from './document-preview';
+import { MessageReasoning } from './message-reasoning';
+import type { UseChatHelpers } from '@ai-sdk/react';
+
+const PurePreviewMessage = ({
+  chatId,
+  message,
+  vote,
+  isLoading,
+  setMessages,
+  reload,
+  isReadonly,
+  requiresScrollPadding,
+}: {
+  chatId: string;
+  message: UIMessage;
+  vote: Vote | undefined;
+  isLoading: boolean;
+  setMessages: UseChatHelpers['setMessages'];
+  reload: UseChatHelpers['reload'];
+  isReadonly: boolean;
+  requiresScrollPadding: boolean;
+}) => {
+  const [mode, setMode] = useState<'view' | 'edit'>('view');
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        data-testid={`message-${message.role}`}
+        className="w-full mx-auto max-w-3xl px-4 group/message"
+        initial={{ y: 5, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        data-role={message.role}
+      >
+        <div
+          className={cn(
+            'flex gap-4 w-full group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl',
+            {
+              'w-full': mode === 'edit',
+              'group-data-[role=user]/message:w-fit': mode !== 'edit',
+            },
+          )}
+        >
+          {message.role === 'assistant' && (
+            <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border bg-background">
+              <div className="translate-y-px">
+                <SparklesIcon size={14} />
+              </div>
+            </div>
+          )}
+
+          <div
+            className={cn('flex flex-col gap-4 w-full', {
+              'min-h-96': message.role === 'assistant' && requiresScrollPadding,
+            })}
+          >
+            {message.experimental_attachments &&
+              message.experimental_attachments.length > 0 && (
+                <div
+                  data-testid={`message-attachments`}
+                  className="flex flex-row justify-end gap-2"
+                >
+                  {message.experimental_attachments.map((attachment) => (
+                    <PreviewAttachment
+                      key={attachment.url}
+                      attachment={attachment}
+                    />
+                  ))}
+                </div>
+              )}
+
+            {message.parts?.map((part, index) => {
+              const { type } = part;
+              const key = `message-${message.id}-part-${index}`;
+
+              if (type === 'reasoning') {
+                return (
+                  <MessageReasoning
+                    key={key}
+                    isLoading={isLoading}
+                    reasoning={part.reasoning}
+                  />
+                );
+              }
+
+              if (type === 'text') {
+                if (mode === 'view') {
+                  return (
+                    <div key={key} className="flex flex-row gap-2 items-start">
+                      {message.role === 'user' && !isReadonly && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              data-testid="message-edit-button"
+                              variant="ghost"
+                              className="px-2 h-fit rounded-full text-muted-foreground opacity-0 group-hover/message:opacity-100"
+                              onClick={() => {
+                                setMode('edit');
+                              }}
+                            >
+                              <PencilEditIcon />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Edit message</TooltipContent>
+                        </Tooltip>
+                      )}
+
+                      <div
+                        data-testid="message-content"
+                        className={cn('flex flex-col gap-4', {
+                          'bg-primary text-primary-foreground px-3 py-2 rounded-xl':
+                            message.role === 'user',
+                        })}
+                      >
+                        <Markdown>{sanitizeText(part.text)}</Markdown>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (mode === 'edit') {
+                  return (
+                    <div key={key} className="flex flex-row gap-2 items-start">
+                      <div className="size-8" />
+
+                      <MessageEditor
+                        key={message.id}
+                        message={message}
+                        setMode={setMode}
+                        setMessages={setMessages}
+                        reload={reload}
+                      />
+                    </div>
+                  );
+                }
+              }
+
+              if (type === 'tool-invocation') {
+                const { toolInvocation } = part;
+                const { toolName, toolCallId, state } = toolInvocation;
+
+                if (state === 'call') {
+                  const { args } = toolInvocation;
+
+                  return (
+                    <div
+                      key={toolCallId}
+                      className={cx({
+                        skeleton: ['getWeather'].includes(toolName),
+                      })}
+                    >
+                      {toolName === 'getWeather' ? (
+                        <Weather />
+                      ) : toolName === 'createDocument' ? (
+                        <DocumentPreview isReadonly={isReadonly} args={args} />
+                      ) : toolName === 'updateDocument' ? (
+                        <DocumentToolCall
+                          type="update"
+                          args={args}
+                          isReadonly={isReadonly}
+                        />
+                      ) : toolName === 'requestSuggestions' ? (
+                        <DocumentToolCall
+                          type="request-suggestions"
+                          args={args}
+                          isReadonly={isReadonly}
+                        />
+                      ) : null}
+                    </div>
+                  );
+                }
+
+                if (state === 'result') {
+                  const { result } = toolInvocation;
+
+                  return (
+                    <div key={toolCallId}>
+                      {toolName === 'getWeather' ? (
+                        <Weather weatherAtLocation={result} />
+                      ) : toolName === 'createDocument' ? (
+                        <DocumentPreview
+                          isReadonly={isReadonly}
+                          result={result}
+                        />
+                      ) : toolName === 'updateDocument' ? (
+                        <DocumentToolResult
+                          type="update"
+                          result={result}
+                          isReadonly={isReadonly}
+                        />
+                      ) : toolName === 'requestSuggestions' ? (
+                        <DocumentToolResult
+                          type="request-suggestions"
+                          result={result}
+                          isReadonly={isReadonly}
+                        />
+                      ) : (
+                        <pre>{JSON.stringify(result, null, 2)}</pre>
+                      )}
+                    </div>
+                  );
+                }
+              }
+            })}
+
+            {!isReadonly && (
+              <MessageActions
+                key={`action-${message.id}`}
+                chatId={chatId}
+                message={message}
+                vote={vote}
+                isLoading={isLoading}
+              />
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
+export const PreviewMessage = memo(
+  PurePreviewMessage,
+  (prevProps, nextProps) => {
+    if (prevProps.isLoading !== nextProps.isLoading) return false;
+    if (prevProps.message.id !== nextProps.message.id) return false;
+    if (prevProps.requiresScrollPadding !== nextProps.requiresScrollPadding)
+      return false;
+    if (!equal(prevProps.message.parts, nextProps.message.parts)) return false;
+    if (!equal(prevProps.vote, nextProps.vote)) return false;
+
+    return true;
+  },
+);
+
+export const ThinkingMessage = () => {
+  const role = 'assistant';
+
+  return (
+    <motion.div
+      data-testid="message-assistant-loading"
+      className="w-full mx-auto max-w-3xl px-4 group/message min-h-96"
+      initial={{ y: 5, opacity: 0 }}
+      animate={{ y: 0, opacity: 1, transition: { delay: 1 } }}
+      data-role={role}
+    >
+      <div
+        className={cx(
+          'flex gap-4 group-data-[role=user]/message:px-3 w-full group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl group-data-[role=user]/message:py-2 rounded-xl',
+          {
+            'group-data-[role=user]/message:bg-muted': true,
+          },
+        )}
+      >
+        <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
+          <SparklesIcon size={14} />
+        </div>
+
+        <div className="flex flex-col gap-2 w-full">
+          <div className="flex flex-col gap-4 text-muted-foreground">
+            Hmm...
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+
+
+================================================
+FILE: components/messages.tsx
+================================================
+import type { UIMessage } from 'ai';
+import { PreviewMessage, ThinkingMessage } from './message';
+import { Greeting } from './greeting';
+import { memo } from 'react';
+import type { Vote } from '@/lib/db/schema';
+import equal from 'fast-deep-equal';
+import type { UseChatHelpers } from '@ai-sdk/react';
+import { motion } from 'framer-motion';
+import { useMessages } from '@/hooks/use-messages';
+
+interface MessagesProps {
+  chatId: string;
+  status: UseChatHelpers['status'];
+  votes: Array<Vote> | undefined;
+  messages: Array<UIMessage>;
+  setMessages: UseChatHelpers['setMessages'];
+  reload: UseChatHelpers['reload'];
+  isReadonly: boolean;
+  isArtifactVisible: boolean;
+}
+
+function PureMessages({
+  chatId,
+  status,
+  votes,
+  messages,
+  setMessages,
+  reload,
+  isReadonly,
+}: MessagesProps) {
+  const {
+    containerRef: messagesContainerRef,
+    endRef: messagesEndRef,
+    onViewportEnter,
+    onViewportLeave,
+    hasSentMessage,
+  } = useMessages({
+    chatId,
+    status,
+  });
+
+  return (
+    <div
+      ref={messagesContainerRef}
+      className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-scroll pt-4 relative"
+    >
+      {messages.length === 0 && <Greeting />}
+
+      {messages.map((message, index) => (
+        <PreviewMessage
+          key={message.id}
+          chatId={chatId}
+          message={message}
+          isLoading={status === 'streaming' && messages.length - 1 === index}
+          vote={
+            votes
+              ? votes.find((vote) => vote.messageId === message.id)
+              : undefined
+          }
+          setMessages={setMessages}
+          reload={reload}
+          isReadonly={isReadonly}
+          requiresScrollPadding={
+            hasSentMessage && index === messages.length - 1
+          }
+        />
+      ))}
+
+      {status === 'submitted' &&
+        messages.length > 0 &&
+        messages[messages.length - 1].role === 'user' && <ThinkingMessage />}
+
+      <motion.div
+        ref={messagesEndRef}
+        className="shrink-0 min-w-[24px] min-h-[24px]"
+        onViewportLeave={onViewportLeave}
+        onViewportEnter={onViewportEnter}
+      />
+    </div>
+  );
+}
+
+export const Messages = memo(PureMessages, (prevProps, nextProps) => {
+  if (prevProps.isArtifactVisible && nextProps.isArtifactVisible) return true;
+
+  if (prevProps.status !== nextProps.status) return false;
+  if (prevProps.status && nextProps.status) return false;
+  if (prevProps.messages.length !== nextProps.messages.length) return false;
+  if (!equal(prevProps.messages, nextProps.messages)) return false;
+  if (!equal(prevProps.votes, nextProps.votes)) return false;
+
+  return true;
+});
+
+
+
+================================================
+FILE: components/model-selector.tsx
+================================================
+'use client';
+
+import { startTransition, useMemo, useOptimistic, useState } from 'react';
+
+import { saveChatModelAsCookie } from '@/app/(chat)/actions';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { chatModels } from '@/lib/ai/models';
+import { cn } from '@/lib/utils';
+
+import { CheckCircleFillIcon, ChevronDownIcon } from './icons';
+import { entitlementsByUserType } from '@/lib/ai/entitlements';
+import type { Session } from 'next-auth';
+
+export function ModelSelector({
+  session,
+  selectedModelId,
+  className,
+}: {
+  session: Session;
+  selectedModelId: string;
+} & React.ComponentProps<typeof Button>) {
+  const [open, setOpen] = useState(false);
+  const [optimisticModelId, setOptimisticModelId] =
+    useOptimistic(selectedModelId);
+
+  const userType = session.user.type;
+  const { availableChatModelIds } = entitlementsByUserType[userType];
+
+  const availableChatModels = chatModels.filter((chatModel) =>
+    availableChatModelIds.includes(chatModel.id),
+  );
+
+  const selectedChatModel = useMemo(
+    () =>
+      availableChatModels.find(
+        (chatModel) => chatModel.id === optimisticModelId,
+      ),
+    [optimisticModelId, availableChatModels],
+  );
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        asChild
+        className={cn(
+          'w-fit data-[state=open]:bg-accent data-[state=open]:text-accent-foreground',
+          className,
+        )}
+      >
+        <Button
+          data-testid="model-selector"
+          variant="outline"
+          className="md:px-2 md:h-[34px]"
+        >
+          {selectedChatModel?.name}
+          <ChevronDownIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[300px]">
+        {availableChatModels.map((chatModel) => {
+          const { id } = chatModel;
+
+          return (
+            <DropdownMenuItem
+              data-testid={`model-selector-item-${id}`}
+              key={id}
+              onSelect={() => {
+                setOpen(false);
+
+                startTransition(() => {
+                  setOptimisticModelId(id);
+                  saveChatModelAsCookie(id);
+                });
+              }}
+              data-active={id === optimisticModelId}
+              asChild
+            >
+              <button
+                type="button"
+                className="gap-4 group/item flex flex-row justify-between items-center w-full"
+              >
+                <div className="flex flex-col gap-1 items-start">
+                  <div>{chatModel.name}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {chatModel.description}
+                  </div>
+                </div>
+
+                <div className="text-foreground dark:text-foreground opacity-0 group-data-[active=true]/item:opacity-100">
+                  <CheckCircleFillIcon />
+                </div>
+              </button>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+
+
+================================================
+FILE: components/multimodal-input.tsx
+================================================
+'use client';
+
+import type { Attachment, UIMessage } from 'ai';
+import cx from 'classnames';
+import type React from 'react';
+import {
+  useRef,
+  useEffect,
+  useState,
+  useCallback,
+  type Dispatch,
+  type SetStateAction,
+  type ChangeEvent,
+  memo,
+} from 'react';
+import { toast } from 'sonner';
+import { useLocalStorage, useWindowSize } from 'usehooks-ts';
+
+import { ArrowUpIcon, PaperclipIcon, StopIcon } from './icons';
+import { PreviewAttachment } from './preview-attachment';
+import { Button } from './ui/button';
+import { Textarea } from './ui/textarea';
+import { SuggestedActions } from './suggested-actions';
+import equal from 'fast-deep-equal';
+import type { UseChatHelpers } from '@ai-sdk/react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { ArrowDown } from 'lucide-react';
+import { useScrollToBottom } from '@/hooks/use-scroll-to-bottom';
+import type { VisibilityType } from './visibility-selector';
+
+function PureMultimodalInput({
+  chatId,
+  input,
+  setInput,
+  status,
+  stop,
+  attachments,
+  setAttachments,
+  messages,
+  setMessages,
+  append,
+  handleSubmit,
+  className,
+  selectedVisibilityType,
+}: {
+  chatId: string;
+  input: UseChatHelpers['input'];
+  setInput: UseChatHelpers['setInput'];
+  status: UseChatHelpers['status'];
+  stop: () => void;
+  attachments: Array<Attachment>;
+  setAttachments: Dispatch<SetStateAction<Array<Attachment>>>;
+  messages: Array<UIMessage>;
+  setMessages: UseChatHelpers['setMessages'];
+  append: UseChatHelpers['append'];
+  handleSubmit: UseChatHelpers['handleSubmit'];
+  className?: string;
+  selectedVisibilityType: VisibilityType;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { width } = useWindowSize();
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      adjustHeight();
+    }
+  }, []);
+
+  const adjustHeight = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight + 2}px`;
+    }
+  };
+
+  const resetHeight = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = '98px';
+    }
+  };
+
+  const [localStorageInput, setLocalStorageInput] = useLocalStorage(
+    'input',
+    '',
+  );
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      const domValue = textareaRef.current.value;
+      // Prefer DOM value over localStorage to handle hydration
+      const finalValue = domValue || localStorageInput || '';
+      setInput(finalValue);
+      adjustHeight();
+    }
+    // Only run once after hydration
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    setLocalStorageInput(input);
+  }, [input, setLocalStorageInput]);
+
+  const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(event.target.value);
+    adjustHeight();
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadQueue, setUploadQueue] = useState<Array<string>>([]);
+
+  const submitForm = useCallback(() => {
+    window.history.replaceState({}, '', `/chat/${chatId}`);
+
+    handleSubmit(undefined, {
+      experimental_attachments: attachments,
+    });
+
+    setAttachments([]);
+    setLocalStorageInput('');
+    resetHeight();
+
+    if (width && width > 768) {
+      textareaRef.current?.focus();
+    }
+  }, [
+    attachments,
+    handleSubmit,
+    setAttachments,
+    setLocalStorageInput,
+    width,
+    chatId,
+  ]);
+
+  const uploadFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('/api/files/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const { url, pathname, contentType } = data;
+
+        return {
+          url,
+          name: pathname,
+          contentType: contentType,
+        };
+      }
+      const { error } = await response.json();
+      toast.error(error);
+    } catch (error) {
+      toast.error('Failed to upload file, please try again!');
+    }
+  };
+
+  const handleFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files || []);
+
+      setUploadQueue(files.map((file) => file.name));
+
+      try {
+        const uploadPromises = files.map((file) => uploadFile(file));
+        const uploadedAttachments = await Promise.all(uploadPromises);
+        const successfullyUploadedAttachments = uploadedAttachments.filter(
+          (attachment) => attachment !== undefined,
+        );
+
+        setAttachments((currentAttachments) => [
+          ...currentAttachments,
+          ...successfullyUploadedAttachments,
+        ]);
+      } catch (error) {
+        console.error('Error uploading files!', error);
+      } finally {
+        setUploadQueue([]);
+      }
+    },
+    [setAttachments],
+  );
+
+  const { isAtBottom, scrollToBottom } = useScrollToBottom();
+
+  useEffect(() => {
+    if (status === 'submitted') {
+      scrollToBottom();
+    }
+  }, [status, scrollToBottom]);
+
+  return (
+    <div className="relative w-full flex flex-col gap-4">
+      <AnimatePresence>
+        {!isAtBottom && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+            className="absolute left-1/2 bottom-28 -translate-x-1/2 z-50"
+          >
+            <Button
+              data-testid="scroll-to-bottom-button"
+              className="rounded-full"
+              size="icon"
+              variant="outline"
+              onClick={(event) => {
+                event.preventDefault();
+                scrollToBottom();
+              }}
+            >
+              <ArrowDown />
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {messages.length === 0 &&
+        attachments.length === 0 &&
+        uploadQueue.length === 0 && (
+          <SuggestedActions
+            append={append}
+            chatId={chatId}
+            selectedVisibilityType={selectedVisibilityType}
+          />
+        )}
+
+      <input
+        type="file"
+        className="fixed -top-4 -left-4 size-0.5 opacity-0 pointer-events-none"
+        ref={fileInputRef}
+        multiple
+        onChange={handleFileChange}
+        tabIndex={-1}
+      />
+
+      {(attachments.length > 0 || uploadQueue.length > 0) && (
+        <div
+          data-testid="attachments-preview"
+          className="flex flex-row gap-2 overflow-x-scroll items-end"
+        >
+          {attachments.map((attachment) => (
+            <PreviewAttachment key={attachment.url} attachment={attachment} />
+          ))}
+
+          {uploadQueue.map((filename) => (
+            <PreviewAttachment
+              key={filename}
+              attachment={{
+                url: '',
+                name: filename,
+                contentType: '',
+              }}
+              isUploading={true}
+            />
+          ))}
+        </div>
+      )}
+
+      <Textarea
+        data-testid="multimodal-input"
+        ref={textareaRef}
+        placeholder="Send a message..."
+        value={input}
+        onChange={handleInput}
+        className={cx(
+          'min-h-[24px] max-h-[calc(75dvh)] overflow-hidden resize-none rounded-2xl !text-base bg-muted pb-10 dark:border-zinc-700',
+          className,
+        )}
+        rows={2}
+        autoFocus
+        onKeyDown={(event) => {
+          if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing
+          ) {
+            event.preventDefault();
+
+            if (status !== 'ready') {
+              toast.error('Please wait for the model to finish its response!');
+            } else {
+              submitForm();
+            }
+          }
+        }}
+      />
+
+      <div className="absolute bottom-0 p-2 w-fit flex flex-row justify-start">
+        <AttachmentsButton fileInputRef={fileInputRef} status={status} />
+      </div>
+
+      <div className="absolute bottom-0 right-0 p-2 w-fit flex flex-row justify-end">
+        {status === 'submitted' ? (
+          <StopButton stop={stop} setMessages={setMessages} />
+        ) : (
+          <SendButton
+            input={input}
+            submitForm={submitForm}
+            uploadQueue={uploadQueue}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export const MultimodalInput = memo(
+  PureMultimodalInput,
+  (prevProps, nextProps) => {
+    if (prevProps.input !== nextProps.input) return false;
+    if (prevProps.status !== nextProps.status) return false;
+    if (!equal(prevProps.attachments, nextProps.attachments)) return false;
+    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType)
+      return false;
+
+    return true;
+  },
+);
+
+function PureAttachmentsButton({
+  fileInputRef,
+  status,
+}: {
+  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
+  status: UseChatHelpers['status'];
+}) {
+  return (
+    <Button
+      data-testid="attachments-button"
+      className="rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700 hover:dark:bg-zinc-900 hover:bg-zinc-200"
+      onClick={(event) => {
+        event.preventDefault();
+        fileInputRef.current?.click();
+      }}
+      disabled={status !== 'ready'}
+      variant="ghost"
+    >
+      <PaperclipIcon size={14} />
+    </Button>
+  );
+}
+
+const AttachmentsButton = memo(PureAttachmentsButton);
+
+function PureStopButton({
+  stop,
+  setMessages,
+}: {
+  stop: () => void;
+  setMessages: UseChatHelpers['setMessages'];
+}) {
+  return (
+    <Button
+      data-testid="stop-button"
+      className="rounded-full p-1.5 h-fit border dark:border-zinc-600"
+      onClick={(event) => {
+        event.preventDefault();
+        stop();
+        setMessages((messages) => messages);
+      }}
+    >
+      <StopIcon size={14} />
+    </Button>
+  );
+}
+
+const StopButton = memo(PureStopButton);
+
+function PureSendButton({
+  submitForm,
+  input,
+  uploadQueue,
+}: {
+  submitForm: () => void;
+  input: string;
+  uploadQueue: Array<string>;
+}) {
+  return (
+    <Button
+      data-testid="send-button"
+      className="rounded-full p-1.5 h-fit border dark:border-zinc-600"
+      onClick={(event) => {
+        event.preventDefault();
+        submitForm();
+      }}
+      disabled={input.length === 0 || uploadQueue.length > 0}
+    >
+      <ArrowUpIcon size={14} />
+    </Button>
+  );
+}
+
+const SendButton = memo(PureSendButton, (prevProps, nextProps) => {
+  if (prevProps.uploadQueue.length !== nextProps.uploadQueue.length)
+    return false;
+  if (prevProps.input !== nextProps.input) return false;
+  return true;
+});
+
+
+
+================================================
+FILE: components/preview-attachment.tsx
+================================================
+import type { Attachment } from 'ai';
+
+import { LoaderIcon } from './icons';
+
+export const PreviewAttachment = ({
+  attachment,
+  isUploading = false,
+}: {
+  attachment: Attachment;
+  isUploading?: boolean;
+}) => {
+  const { name, url, contentType } = attachment;
+
+  return (
+    <div data-testid="input-attachment-preview" className="flex flex-col gap-2">
+      <div className="w-20 h-16 aspect-video bg-muted rounded-md relative flex flex-col items-center justify-center">
+        {contentType ? (
+          contentType.startsWith('image') ? (
+            // NOTE: it is recommended to use next/image for images
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={url}
+              src={url}
+              alt={name ?? 'An image attachment'}
+              className="rounded-md size-full object-cover"
+            />
+          ) : (
+            <div className="" />
+          )
+        ) : (
+          <div className="" />
+        )}
+
+        {isUploading && (
+          <div
+            data-testid="input-attachment-loader"
+            className="animate-spin absolute text-zinc-500"
+          >
+            <LoaderIcon />
+          </div>
+        )}
+      </div>
+      <div className="text-xs text-zinc-500 max-w-16 truncate">{name}</div>
+    </div>
+  );
+};
+
+
+
+================================================
+FILE: components/sheet-editor.tsx
+================================================
+'use client';
+
+import React, { memo, useEffect, useMemo, useState } from 'react';
+import DataGrid, { textEditor } from 'react-data-grid';
+import { parse, unparse } from 'papaparse';
+import { useTheme } from 'next-themes';
+import { cn } from '@/lib/utils';
+
+import 'react-data-grid/lib/styles.css';
+
+type SheetEditorProps = {
+  content: string;
+  saveContent: (content: string, isCurrentVersion: boolean) => void;
+  status: string;
+  isCurrentVersion: boolean;
+  currentVersionIndex: number;
+};
+
+const MIN_ROWS = 50;
+const MIN_COLS = 26;
+
+const PureSpreadsheetEditor = ({
+  content,
+  saveContent,
+  status,
+  isCurrentVersion,
+}: SheetEditorProps) => {
+  const { theme } = useTheme();
+
+  const parseData = useMemo(() => {
+    if (!content) return Array(MIN_ROWS).fill(Array(MIN_COLS).fill(''));
+    const result = parse<string[]>(content, { skipEmptyLines: true });
+
+    const paddedData = result.data.map((row) => {
+      const paddedRow = [...row];
+      while (paddedRow.length < MIN_COLS) {
+        paddedRow.push('');
+      }
+      return paddedRow;
+    });
+
+    while (paddedData.length < MIN_ROWS) {
+      paddedData.push(Array(MIN_COLS).fill(''));
+    }
+
+    return paddedData;
+  }, [content]);
+
+  const columns = useMemo(() => {
+    const rowNumberColumn = {
+      key: 'rowNumber',
+      name: '',
+      frozen: true,
+      width: 50,
+      renderCell: ({ rowIdx }: { rowIdx: number }) => rowIdx + 1,
+      cellClass: 'border-t border-r dark:bg-zinc-950 dark:text-zinc-50',
+      headerCellClass: 'border-t border-r dark:bg-zinc-900 dark:text-zinc-50',
+    };
+
+    const dataColumns = Array.from({ length: MIN_COLS }, (_, i) => ({
+      key: i.toString(),
+      name: String.fromCharCode(65 + i),
+      renderEditCell: textEditor,
+      width: 120,
+      cellClass: cn(`border-t dark:bg-zinc-950 dark:text-zinc-50`, {
+        'border-l': i !== 0,
+      }),
+      headerCellClass: cn(`border-t dark:bg-zinc-900 dark:text-zinc-50`, {
+        'border-l': i !== 0,
+      }),
+    }));
+
+    return [rowNumberColumn, ...dataColumns];
+  }, []);
+
+  const initialRows = useMemo(() => {
+    return parseData.map((row, rowIndex) => {
+      const rowData: any = {
+        id: rowIndex,
+        rowNumber: rowIndex + 1,
+      };
+
+      columns.slice(1).forEach((col, colIndex) => {
+        rowData[col.key] = row[colIndex] || '';
+      });
+
+      return rowData;
+    });
+  }, [parseData, columns]);
+
+  const [localRows, setLocalRows] = useState(initialRows);
+
+  useEffect(() => {
+    setLocalRows(initialRows);
+  }, [initialRows]);
+
+  const generateCsv = (data: any[][]) => {
+    return unparse(data);
+  };
+
+  const handleRowsChange = (newRows: any[]) => {
+    setLocalRows(newRows);
+
+    const updatedData = newRows.map((row) => {
+      return columns.slice(1).map((col) => row[col.key] || '');
+    });
+
+    const newCsvContent = generateCsv(updatedData);
+    saveContent(newCsvContent, true);
+  };
+
+  return (
+    <DataGrid
+      className={theme === 'dark' ? 'rdg-dark' : 'rdg-light'}
+      columns={columns}
+      rows={localRows}
+      enableVirtualization
+      onRowsChange={handleRowsChange}
+      onCellClick={(args) => {
+        if (args.column.key !== 'rowNumber') {
+          args.selectCell(true);
+        }
+      }}
+      style={{ height: '100%' }}
+      defaultColumnOptions={{
+        resizable: true,
+        sortable: true,
+      }}
+    />
+  );
+};
+
+function areEqual(prevProps: SheetEditorProps, nextProps: SheetEditorProps) {
+  return (
+    prevProps.currentVersionIndex === nextProps.currentVersionIndex &&
+    prevProps.isCurrentVersion === nextProps.isCurrentVersion &&
+    !(prevProps.status === 'streaming' && nextProps.status === 'streaming') &&
+    prevProps.content === nextProps.content &&
+    prevProps.saveContent === nextProps.saveContent
+  );
+}
+
+export const SpreadsheetEditor = memo(PureSpreadsheetEditor, areEqual);
+
+
+
+================================================
+FILE: components/sidebar-history-item.tsx
+================================================
+import type { Chat } from '@/lib/db/schema';
+import {
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from './ui/sidebar';
+import Link from 'next/link';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import {
+  CheckCircleFillIcon,
+  GlobeIcon,
+  LockIcon,
+  MoreHorizontalIcon,
+  ShareIcon,
+  TrashIcon,
+} from './icons';
+import { memo } from 'react';
+import { useChatVisibility } from '@/hooks/use-chat-visibility';
+
+const PureChatItem = ({
+  chat,
+  isActive,
+  onDelete,
+  setOpenMobile,
+}: {
+  chat: Chat;
+  isActive: boolean;
+  onDelete: (chatId: string) => void;
+  setOpenMobile: (open: boolean) => void;
+}) => {
+  const { visibilityType, setVisibilityType } = useChatVisibility({
+    chatId: chat.id,
+    initialVisibilityType: chat.visibility,
+  });
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={isActive}>
+        <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile(false)}>
+          <span>{chat.title}</span>
+        </Link>
+      </SidebarMenuButton>
+
+      <DropdownMenu modal={true}>
+        <DropdownMenuTrigger asChild>
+          <SidebarMenuAction
+            className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground mr-0.5"
+            showOnHover={!isActive}
+          >
+            <MoreHorizontalIcon />
+            <span className="sr-only">More</span>
+          </SidebarMenuAction>
+        </DropdownMenuTrigger>
+
+        <DropdownMenuContent side="bottom" align="end">
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="cursor-pointer">
+              <ShareIcon />
+              <span>Share</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem
+                  className="cursor-pointer flex-row justify-between"
+                  onClick={() => {
+                    setVisibilityType('private');
+                  }}
+                >
+                  <div className="flex flex-row gap-2 items-center">
+                    <LockIcon size={12} />
+                    <span>Private</span>
+                  </div>
+                  {visibilityType === 'private' ? (
+                    <CheckCircleFillIcon />
+                  ) : null}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer flex-row justify-between"
+                  onClick={() => {
+                    setVisibilityType('public');
+                  }}
+                >
+                  <div className="flex flex-row gap-2 items-center">
+                    <GlobeIcon />
+                    <span>Public</span>
+                  </div>
+                  {visibilityType === 'public' ? <CheckCircleFillIcon /> : null}
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuPortal>
+          </DropdownMenuSub>
+
+          <DropdownMenuItem
+            className="cursor-pointer text-destructive focus:bg-destructive/15 focus:text-destructive dark:text-red-500"
+            onSelect={() => onDelete(chat.id)}
+          >
+            <TrashIcon />
+            <span>Delete</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </SidebarMenuItem>
+  );
+};
+
+export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
+  if (prevProps.isActive !== nextProps.isActive) return false;
+  return true;
+});
+
+
+
+================================================
+FILE: components/sidebar-history.tsx
+================================================
+'use client';
+
+import { isToday, isYesterday, subMonths, subWeeks } from 'date-fns';
+import { useParams, useRouter } from 'next/navigation';
+import type { User } from 'next-auth';
+import { useState } from 'react';
+import { toast } from 'sonner';
+import { motion } from 'framer-motion';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarMenu,
+  useSidebar,
+} from '@/components/ui/sidebar';
+import type { Chat } from '@/lib/db/schema';
+import { fetcher } from '@/lib/utils';
+import { ChatItem } from './sidebar-history-item';
+import useSWRInfinite from 'swr/infinite';
+import { LoaderIcon } from './icons';
+
+type GroupedChats = {
+  today: Chat[];
+  yesterday: Chat[];
+  lastWeek: Chat[];
+  lastMonth: Chat[];
+  older: Chat[];
+};
+
+export interface ChatHistory {
+  chats: Array<Chat>;
+  hasMore: boolean;
+}
+
+const PAGE_SIZE = 20;
+
+const groupChatsByDate = (chats: Chat[]): GroupedChats => {
+  const now = new Date();
+  const oneWeekAgo = subWeeks(now, 1);
+  const oneMonthAgo = subMonths(now, 1);
+
+  return chats.reduce(
+    (groups, chat) => {
+      const chatDate = new Date(chat.createdAt);
+
+      if (isToday(chatDate)) {
+        groups.today.push(chat);
+      } else if (isYesterday(chatDate)) {
+        groups.yesterday.push(chat);
+      } else if (chatDate > oneWeekAgo) {
+        groups.lastWeek.push(chat);
+      } else if (chatDate > oneMonthAgo) {
+        groups.lastMonth.push(chat);
+      } else {
+        groups.older.push(chat);
+      }
+
+      return groups;
+    },
+    {
+      today: [],
+      yesterday: [],
+      lastWeek: [],
+      lastMonth: [],
+      older: [],
+    } as GroupedChats,
+  );
+};
+
+export function getChatHistoryPaginationKey(
+  pageIndex: number,
+  previousPageData: ChatHistory,
+) {
+  if (previousPageData && previousPageData.hasMore === false) {
+    return null;
+  }
+
+  if (pageIndex === 0) return `/api/history?limit=${PAGE_SIZE}`;
+
+  const firstChatFromPage = previousPageData.chats.at(-1);
+
+  if (!firstChatFromPage) return null;
+
+  return `/api/history?ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
+}
+
+export function SidebarHistory({ user }: { user: User | undefined }) {
+  const { setOpenMobile } = useSidebar();
+  const { id } = useParams();
+
+  const {
+    data: paginatedChatHistories,
+    setSize,
+    isValidating,
+    isLoading,
+    mutate,
+  } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
+    fallbackData: [],
+  });
+
+  const router = useRouter();
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  const hasReachedEnd = paginatedChatHistories
+    ? paginatedChatHistories.some((page) => page.hasMore === false)
+    : false;
+
+  const hasEmptyChatHistory = paginatedChatHistories
+    ? paginatedChatHistories.every((page) => page.chats.length === 0)
+    : false;
+
+  const handleDelete = async () => {
+    const deletePromise = fetch(`/api/chat?id=${deleteId}`, {
+      method: 'DELETE',
+    });
+
+    toast.promise(deletePromise, {
+      loading: 'Deleting chat...',
+      success: () => {
+        mutate((chatHistories) => {
+          if (chatHistories) {
+            return chatHistories.map((chatHistory) => ({
+              ...chatHistory,
+              chats: chatHistory.chats.filter((chat) => chat.id !== deleteId),
+            }));
+          }
+        });
+
+        return 'Chat deleted successfully';
+      },
+      error: 'Failed to delete chat',
+    });
+
+    setShowDeleteDialog(false);
+
+    if (deleteId === id) {
+      router.push('/');
+    }
+  };
+
+  if (!user) {
+    return (
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <div className="px-2 text-zinc-500 w-full flex flex-row justify-center items-center text-sm gap-2">
+            Login to save and revisit previous chats!
+          </div>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <SidebarGroup>
+        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+          Today
+        </div>
+        <SidebarGroupContent>
+          <div className="flex flex-col">
+            {[44, 32, 28, 64, 52].map((item) => (
+              <div
+                key={item}
+                className="rounded-md h-8 flex gap-2 px-2 items-center"
+              >
+                <div
+                  className="h-4 rounded-md flex-1 max-w-[--skeleton-width] bg-sidebar-accent-foreground/10"
+                  style={
+                    {
+                      '--skeleton-width': `${item}%`,
+                    } as React.CSSProperties
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+
+  if (hasEmptyChatHistory) {
+    return (
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <div className="px-2 text-zinc-500 w-full flex flex-row justify-center items-center text-sm gap-2">
+            Your conversations will appear here once you start chatting!
+          </div>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+
+  return (
+    <>
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {paginatedChatHistories &&
+              (() => {
+                const chatsFromHistory = paginatedChatHistories.flatMap(
+                  (paginatedChatHistory) => paginatedChatHistory.chats,
+                );
+
+                const groupedChats = groupChatsByDate(chatsFromHistory);
+
+                return (
+                  <div className="flex flex-col gap-6">
+                    {groupedChats.today.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+                          Today
+                        </div>
+                        {groupedChats.today.map((chat) => (
+                          <ChatItem
+                            key={chat.id}
+                            chat={chat}
+                            isActive={chat.id === id}
+                            onDelete={(chatId) => {
+                              setDeleteId(chatId);
+                              setShowDeleteDialog(true);
+                            }}
+                            setOpenMobile={setOpenMobile}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {groupedChats.yesterday.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+                          Yesterday
+                        </div>
+                        {groupedChats.yesterday.map((chat) => (
+                          <ChatItem
+                            key={chat.id}
+                            chat={chat}
+                            isActive={chat.id === id}
+                            onDelete={(chatId) => {
+                              setDeleteId(chatId);
+                              setShowDeleteDialog(true);
+                            }}
+                            setOpenMobile={setOpenMobile}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {groupedChats.lastWeek.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+                          Last 7 days
+                        </div>
+                        {groupedChats.lastWeek.map((chat) => (
+                          <ChatItem
+                            key={chat.id}
+                            chat={chat}
+                            isActive={chat.id === id}
+                            onDelete={(chatId) => {
+                              setDeleteId(chatId);
+                              setShowDeleteDialog(true);
+                            }}
+                            setOpenMobile={setOpenMobile}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {groupedChats.lastMonth.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+                          Last 30 days
+                        </div>
+                        {groupedChats.lastMonth.map((chat) => (
+                          <ChatItem
+                            key={chat.id}
+                            chat={chat}
+                            isActive={chat.id === id}
+                            onDelete={(chatId) => {
+                              setDeleteId(chatId);
+                              setShowDeleteDialog(true);
+                            }}
+                            setOpenMobile={setOpenMobile}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {groupedChats.older.length > 0 && (
+                      <div>
+                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+                          Older than last month
+                        </div>
+                        {groupedChats.older.map((chat) => (
+                          <ChatItem
+                            key={chat.id}
+                            chat={chat}
+                            isActive={chat.id === id}
+                            onDelete={(chatId) => {
+                              setDeleteId(chatId);
+                              setShowDeleteDialog(true);
+                            }}
+                            setOpenMobile={setOpenMobile}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+          </SidebarMenu>
+
+          <motion.div
+            onViewportEnter={() => {
+              if (!isValidating && !hasReachedEnd) {
+                setSize((size) => size + 1);
+              }
+            }}
+          />
+
+          {hasReachedEnd ? (
+            <div className="px-2 text-zinc-500 w-full flex flex-row justify-center items-center text-sm gap-2 mt-8">
+              You have reached the end of your chat history.
+            </div>
+          ) : (
+            <div className="p-2 text-zinc-500 dark:text-zinc-400 flex flex-row gap-2 items-center mt-8">
+              <div className="animate-spin">
+                <LoaderIcon />
+              </div>
+              <div>Loading Chats...</div>
+            </div>
+          )}
+        </SidebarGroupContent>
+      </SidebarGroup>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete your
+              chat and remove it from our servers.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+
+
+
+
+
+================================================
+FILE: components/submit-button.tsx
+================================================
+'use client';
+
+import { useFormStatus } from 'react-dom';
+
+import { LoaderIcon } from '@/components/icons';
+
+import { Button } from './ui/button';
+
+export function SubmitButton({
+  children,
+  isSuccessful,
+}: {
+  children: React.ReactNode;
+  isSuccessful: boolean;
+}) {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button
+      type={pending ? 'button' : 'submit'}
+      aria-disabled={pending || isSuccessful}
+      disabled={pending || isSuccessful}
+      className="relative"
+    >
+      {children}
+
+      {(pending || isSuccessful) && (
+        <span className="animate-spin absolute right-4">
+          <LoaderIcon />
+        </span>
+      )}
+
+      <output aria-live="polite" className="sr-only">
+        {pending || isSuccessful ? 'Loading' : 'Submit form'}
+      </output>
+    </Button>
+  );
+}
+
+
+
+================================================
+FILE: components/suggested-actions.tsx
+================================================
+'use client';
+
+import { motion } from 'framer-motion';
+import { Button } from './ui/button';
+import { memo } from 'react';
+import type { UseChatHelpers } from '@ai-sdk/react';
+import type { VisibilityType } from './visibility-selector';
+
+interface SuggestedActionsProps {
+  chatId: string;
+  append: UseChatHelpers['append'];
+  selectedVisibilityType: VisibilityType;
+}
+
+function PureSuggestedActions({
+  chatId,
+  append,
+  selectedVisibilityType,
+}: SuggestedActionsProps) {
+  const suggestedActions = [
+    {
+      title: 'What are the advantages',
+      label: 'of using Next.js?',
+      action: 'What are the advantages of using Next.js?',
+    },
+    {
+      title: 'Write code to',
+      label: `demonstrate djikstra's algorithm`,
+      action: `Write code to demonstrate djikstra's algorithm`,
+    },
+    {
+      title: 'Help me write an essay',
+      label: `about silicon valley`,
+      action: `Help me write an essay about silicon valley`,
+    },
+    {
+      title: 'What is the weather',
+      label: 'in San Francisco?',
+      action: 'What is the weather in San Francisco?',
+    },
+  ];
+
+  return (
+    <div
+      data-testid="suggested-actions"
+      className="grid sm:grid-cols-2 gap-2 w-full"
+    >
+      {suggestedActions.map((suggestedAction, index) => (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 20 }}
+          transition={{ delay: 0.05 * index }}
+          key={`suggested-action-${suggestedAction.title}-${index}`}
+          className={index > 1 ? 'hidden sm:block' : 'block'}
+        >
+          <Button
+            variant="ghost"
+            onClick={async () => {
+              window.history.replaceState({}, '', `/chat/${chatId}`);
+
+              append({
+                role: 'user',
+                content: suggestedAction.action,
+              });
+            }}
+            className="text-left border rounded-xl px-4 py-3.5 text-sm flex-1 gap-1 sm:flex-col w-full h-auto justify-start items-start"
+          >
+            <span className="font-medium">{suggestedAction.title}</span>
+            <span className="text-muted-foreground">
+              {suggestedAction.label}
+            </span>
+          </Button>
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+
+export const SuggestedActions = memo(
+  PureSuggestedActions,
+  (prevProps, nextProps) => {
+    if (prevProps.chatId !== nextProps.chatId) return false;
+    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType)
+      return false;
+
+    return true;
+  },
+);
+
+
+
+================================================
+FILE: components/suggestion.tsx
+================================================
+'use client';
+
+import { AnimatePresence, motion } from 'framer-motion';
+import { useState } from 'react';
+import { useWindowSize } from 'usehooks-ts';
+
+import type { UISuggestion } from '@/lib/editor/suggestions';
+
+import { CrossIcon, MessageIcon } from './icons';
+import { Button } from './ui/button';
+import { cn } from '@/lib/utils';
+import { ArtifactKind } from './artifact';
+
+export const Suggestion = ({
+  suggestion,
+  onApply,
+  artifactKind,
+}: {
+  suggestion: UISuggestion;
+  onApply: () => void;
+  artifactKind: ArtifactKind;
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const { width: windowWidth } = useWindowSize();
+
+  return (
+    <AnimatePresence>
+      {!isExpanded ? (
+        <motion.div
+          className={cn('cursor-pointer text-muted-foreground p-1', {
+            'absolute -right-8': artifactKind === 'text',
+            'sticky top-0 right-4': artifactKind === 'code',
+          })}
+          onClick={() => {
+            setIsExpanded(true);
+          }}
+          whileHover={{ scale: 1.1 }}
+        >
+          <MessageIcon size={windowWidth && windowWidth < 768 ? 16 : 14} />
+        </motion.div>
+      ) : (
+        <motion.div
+          key={suggestion.id}
+          className="absolute bg-background p-3 flex flex-col gap-3 rounded-2xl border text-sm w-56 shadow-xl z-50 -right-12 md:-right-16 font-sans"
+          transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: -20 }}
+          exit={{ opacity: 0, y: -10 }}
+          whileHover={{ scale: 1.05 }}
+        >
+          <div className="flex flex-row items-center justify-between">
+            <div className="flex flex-row items-center gap-2">
+              <div className="size-4 bg-muted-foreground/25 rounded-full" />
+              <div className="font-medium">Assistant</div>
+            </div>
+            <button
+              type="button"
+              className="text-xs text-gray-500 cursor-pointer"
+              onClick={() => {
+                setIsExpanded(false);
+              }}
+            >
+              <CrossIcon size={12} />
+            </button>
+          </div>
+          <div>{suggestion.description}</div>
+          <Button
+            variant="outline"
+            className="w-fit py-1.5 px-3 rounded-full"
+            onClick={onApply}
+          >
+            Apply
+          </Button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+
+
+================================================
+FILE: components/text-editor.tsx
+================================================
+'use client';
+
+import { exampleSetup } from 'prosemirror-example-setup';
+import { inputRules } from 'prosemirror-inputrules';
+import { EditorState } from 'prosemirror-state';
+import { EditorView } from 'prosemirror-view';
+import React, { memo, useEffect, useRef } from 'react';
+
+import type { Suggestion } from '@/lib/db/schema';
+import {
+  documentSchema,
+  handleTransaction,
+  headingRule,
+} from '@/lib/editor/config';
+import {
+  buildContentFromDocument,
+  buildDocumentFromContent,
+  createDecorations,
+} from '@/lib/editor/functions';
+import {
+  projectWithPositions,
+  suggestionsPlugin,
+  suggestionsPluginKey,
+} from '@/lib/editor/suggestions';
+
+type EditorProps = {
+  content: string;
+  onSaveContent: (updatedContent: string, debounce: boolean) => void;
+  status: 'streaming' | 'idle';
+  isCurrentVersion: boolean;
+  currentVersionIndex: number;
+  suggestions: Array<Suggestion>;
+};
+
+function PureEditor({
+  content,
+  onSaveContent,
+  suggestions,
+  status,
+}: EditorProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<EditorView | null>(null);
+
+  useEffect(() => {
+    if (containerRef.current && !editorRef.current) {
+      const state = EditorState.create({
+        doc: buildDocumentFromContent(content),
+        plugins: [
+          ...exampleSetup({ schema: documentSchema, menuBar: false }),
+          inputRules({
+            rules: [
+              headingRule(1),
+              headingRule(2),
+              headingRule(3),
+              headingRule(4),
+              headingRule(5),
+              headingRule(6),
+            ],
+          }),
+          suggestionsPlugin,
+        ],
+      });
+
+      editorRef.current = new EditorView(containerRef.current, {
+        state,
+      });
+    }
+
+    return () => {
+      if (editorRef.current) {
+        editorRef.current.destroy();
+        editorRef.current = null;
+      }
+    };
+    // NOTE: we only want to run this effect once
+    // eslint-disable-next-line
+  }, []);
+
+  useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.setProps({
+        dispatchTransaction: (transaction) => {
+          handleTransaction({
+            transaction,
+            editorRef,
+            onSaveContent,
+          });
+        },
+      });
+    }
+  }, [onSaveContent]);
+
+  useEffect(() => {
+    if (editorRef.current && content) {
+      const currentContent = buildContentFromDocument(
+        editorRef.current.state.doc,
+      );
+
+      if (status === 'streaming') {
+        const newDocument = buildDocumentFromContent(content);
+
+        const transaction = editorRef.current.state.tr.replaceWith(
+          0,
+          editorRef.current.state.doc.content.size,
+          newDocument.content,
+        );
+
+        transaction.setMeta('no-save', true);
+        editorRef.current.dispatch(transaction);
+        return;
+      }
+
+      if (currentContent !== content) {
+        const newDocument = buildDocumentFromContent(content);
+
+        const transaction = editorRef.current.state.tr.replaceWith(
+          0,
+          editorRef.current.state.doc.content.size,
+          newDocument.content,
+        );
+
+        transaction.setMeta('no-save', true);
+        editorRef.current.dispatch(transaction);
+      }
+    }
+  }, [content, status]);
+
+  useEffect(() => {
+    if (editorRef.current?.state.doc && content) {
+      const projectedSuggestions = projectWithPositions(
+        editorRef.current.state.doc,
+        suggestions,
+      ).filter(
+        (suggestion) => suggestion.selectionStart && suggestion.selectionEnd,
+      );
+
+      const decorations = createDecorations(
+        projectedSuggestions,
+        editorRef.current,
+      );
+
+      const transaction = editorRef.current.state.tr;
+      transaction.setMeta(suggestionsPluginKey, { decorations });
+      editorRef.current.dispatch(transaction);
+    }
+  }, [suggestions, content]);
+
+  return (
+    <div className="relative prose dark:prose-invert" ref={containerRef} />
+  );
+}
+
+function areEqual(prevProps: EditorProps, nextProps: EditorProps) {
+  return (
+    prevProps.suggestions === nextProps.suggestions &&
+    prevProps.currentVersionIndex === nextProps.currentVersionIndex &&
+    prevProps.isCurrentVersion === nextProps.isCurrentVersion &&
+    !(prevProps.status === 'streaming' && nextProps.status === 'streaming') &&
+    prevProps.content === nextProps.content &&
+    prevProps.onSaveContent === nextProps.onSaveContent
+  );
+}
+
+export const Editor = memo(PureEditor, areEqual);
+
+
+
+
+
+================================================
+FILE: components/toast.tsx
+================================================
+'use client';
+
+import React, { useEffect, useRef, useState, type ReactNode } from 'react';
+import { toast as sonnerToast } from 'sonner';
+import { CheckCircleFillIcon, WarningIcon } from './icons';
+import { cn } from '@/lib/utils';
+
+const iconsByType: Record<'success' | 'error', ReactNode> = {
+  success: <CheckCircleFillIcon />,
+  error: <WarningIcon />,
+};
+
+export function toast(props: Omit<ToastProps, 'id'>) {
+  return sonnerToast.custom((id) => (
+    <Toast id={id} type={props.type} description={props.description} />
+  ));
+}
+
+function Toast(props: ToastProps) {
+  const { id, type, description } = props;
+
+  const descriptionRef = useRef<HTMLDivElement>(null);
+  const [multiLine, setMultiLine] = useState(false);
+
+  useEffect(() => {
+    const el = descriptionRef.current;
+    if (!el) return;
+
+    const update = () => {
+      const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight);
+      const lines = Math.round(el.scrollHeight / lineHeight);
+      setMultiLine(lines > 1);
+    };
+
+    update(); // initial check
+    const ro = new ResizeObserver(update); // re-check on width changes
+    ro.observe(el);
+
+    return () => ro.disconnect();
+  }, [description]);
+
+  return (
+    <div className="flex w-full toast-mobile:w-[356px] justify-center">
+      <div
+        data-testid="toast"
+        key={id}
+        className={cn(
+          'bg-zinc-100 p-3 rounded-lg w-full toast-mobile:w-fit flex flex-row gap-3',
+          multiLine ? 'items-start' : 'items-center',
+        )}
+      >
+        <div
+          data-type={type}
+          className={cn(
+            'data-[type=error]:text-red-600 data-[type=success]:text-green-600',
+            { 'pt-1': multiLine },
+          )}
+        >
+          {iconsByType[type]}
+        </div>
+        <div ref={descriptionRef} className="text-zinc-950 text-sm">
+          {description}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface ToastProps {
+  id: string | number;
+  type: 'success' | 'error';
+  description: string;
+}
+
+
+
+
+
+
+
+================================================
+FILE: components/ui/sheet.tsx
+================================================
+'use client';
+
+import * as React from 'react';
+import * as SheetPrimitive from '@radix-ui/react-dialog';
+import { cva, type VariantProps } from 'class-variance-authority';
+import { X } from 'lucide-react';
+
+import { cn } from '@/lib/utils';
+
+const Sheet = SheetPrimitive.Root;
+
+const SheetTrigger = SheetPrimitive.Trigger;
+
+const SheetClose = SheetPrimitive.Close;
+
+const SheetPortal = SheetPrimitive.Portal;
+
+const SheetOverlay = React.forwardRef<
+  React.ElementRef<typeof SheetPrimitive.Overlay>,
+  React.ComponentPropsWithoutRef<typeof SheetPrimitive.Overlay>
+>(({ className, ...props }, ref) => (
+  <SheetPrimitive.Overlay
+    className={cn(
+      'fixed inset-0 z-50 bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      className,
+    )}
+    {...props}
+    ref={ref}
+  />
+));
+SheetOverlay.displayName = SheetPrimitive.Overlay.displayName;
+
+const sheetVariants = cva(
+  'fixed z-50 gap-4 bg-background p-6 shadow-lg transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
+  {
+    variants: {
+      side: {
+        top: 'inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
+        bottom:
+          'inset-x-0 bottom-0 border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
+        left: 'inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm',
+        right:
+          'inset-y-0 right-0 h-full w-3/4  border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm',
+      },
+    },
+    defaultVariants: {
+      side: 'right',
+    },
+  },
+);
+
+interface SheetContentProps
+  extends React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>,
+    VariantProps<typeof sheetVariants> {}
+
+const SheetContent = React.forwardRef<
+  React.ElementRef<typeof SheetPrimitive.Content>,
+  SheetContentProps
+>(({ side = 'right', className, children, ...props }, ref) => (
+  <SheetPortal>
+    <SheetOverlay />
+    <SheetPrimitive.Content
+      ref={ref}
+      className={cn(sheetVariants({ side }), className)}
+      {...props}
+    >
+      {children}
+      <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+        <X className="h-4 w-4" />
+        <span className="sr-only">Close</span>
+      </SheetPrimitive.Close>
+    </SheetPrimitive.Content>
+  </SheetPortal>
+));
+SheetContent.displayName = SheetPrimitive.Content.displayName;
+
+const SheetHeader = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      'flex flex-col space-y-2 text-center sm:text-left',
+      className,
+    )}
+    {...props}
+  />
+);
+SheetHeader.displayName = 'SheetHeader';
+
+const SheetFooter = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      'flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2',
+      className,
+    )}
+    {...props}
+  />
+);
+SheetFooter.displayName = 'SheetFooter';
+
+const SheetTitle = React.forwardRef<
+  React.ElementRef<typeof SheetPrimitive.Title>,
+  React.ComponentPropsWithoutRef<typeof SheetPrimitive.Title>
+>(({ className, ...props }, ref) => (
+  <SheetPrimitive.Title
+    ref={ref}
+    className={cn('text-lg font-semibold text-foreground', className)}
+    {...props}
+  />
+));
+SheetTitle.displayName = SheetPrimitive.Title.displayName;
+
+const SheetDescription = React.forwardRef<
+  React.ElementRef<typeof SheetPrimitive.Description>,
+  React.ComponentPropsWithoutRef<typeof SheetPrimitive.Description>
+>(({ className, ...props }, ref) => (
+  <SheetPrimitive.Description
+    ref={ref}
+    className={cn('text-sm text-muted-foreground', className)}
+    {...props}
+  />
+));
+SheetDescription.displayName = SheetPrimitive.Description.displayName;
+
+export {
+  Sheet,
+  SheetPortal,
+  SheetOverlay,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetFooter,
+  SheetTitle,
+  SheetDescription,
+};
+
+
+
+
+
+================================================
+FILE: components/ui/textarea.tsx
+================================================
+import * as React from 'react';
+
+import { cn } from '@/lib/utils';
+
+const Textarea = React.forwardRef<
+  HTMLTextAreaElement,
+  React.ComponentProps<'textarea'>
+>(({ className, ...props }, ref) => {
+  return (
+    <textarea
+      className={cn(
+        'flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm',
+        className,
+      )}
+      ref={ref}
+      {...props}
+    />
+  );
+});
+Textarea.displayName = 'Textarea';
+
+export { Textarea };
+
+
+
+
+}
+
+
+================================================
+FILE: hooks/use-auto-resume.ts
+================================================
+'use client';
+
+import { useEffect } from 'react';
+import type { UIMessage } from 'ai';
+import type { UseChatHelpers } from '@ai-sdk/react';
+import type { DataPart } from '@/lib/types';
+
+export interface UseAutoResumeParams {
+  autoResume: boolean;
+  initialMessages: UIMessage[];
+  experimental_resume: UseChatHelpers['experimental_resume'];
+  data: UseChatHelpers['data'];
+  setMessages: UseChatHelpers['setMessages'];
+}
+
+export function useAutoResume({
+  autoResume,
+  initialMessages,
+  experimental_resume,
+  data,
+  setMessages,
+}: UseAutoResumeParams) {
+  useEffect(() => {
+    if (!autoResume) return;
+
+    const mostRecentMessage = initialMessages.at(-1);
+
+    if (mostRecentMessage?.role === 'user') {
+      experimental_resume();
+    }
+
+    // we intentionally run this once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.length === 0) return;
+
+    const dataPart = data[0] as DataPart;
+
+    if (dataPart.type === 'append-message') {
+      const message = JSON.parse(dataPart.message) as UIMessage;
+      setMessages([...initialMessages, message]);
+    }
+  }, [data, initialMessages, setMessages]);
+}
+
+
+
+================================================
+FILE: hooks/use-chat-visibility.ts
+================================================
+'use client';
+
+import { useMemo } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
+import { unstable_serialize } from 'swr/infinite';
+import { updateChatVisibility } from '@/app/(chat)/actions';
+import {
+  getChatHistoryPaginationKey,
+  type ChatHistory,
+} from '@/components/sidebar-history';
+import type { VisibilityType } from '@/components/visibility-selector';
+
+export function useChatVisibility({
+  chatId,
+  initialVisibilityType,
+}: {
+  chatId: string;
+  initialVisibilityType: VisibilityType;
+}) {
+  const { mutate, cache } = useSWRConfig();
+  const history: ChatHistory = cache.get('/api/history')?.data;
+
+  const { data: localVisibility, mutate: setLocalVisibility } = useSWR(
+    `${chatId}-visibility`,
+    null,
+    {
+      fallbackData: initialVisibilityType,
+    },
+  );
+
+  const visibilityType = useMemo(() => {
+    if (!history) return localVisibility;
+    const chat = history.chats.find((chat) => chat.id === chatId);
+    if (!chat) return 'private';
+    return chat.visibility;
+  }, [history, chatId, localVisibility]);
+
+  const setVisibilityType = (updatedVisibilityType: VisibilityType) => {
+    setLocalVisibility(updatedVisibilityType);
+    mutate(unstable_serialize(getChatHistoryPaginationKey));
+
+    updateChatVisibility({
+      chatId: chatId,
+      visibility: updatedVisibilityType,
+    });
+  };
+
+  return { visibilityType, setVisibilityType };
+}
+
+
+
+================================================
+FILE: hooks/use-messages.tsx
+================================================
+import { useState, useEffect } from 'react';
+import { useScrollToBottom } from './use-scroll-to-bottom';
+import type { UseChatHelpers } from '@ai-sdk/react';
+
+export function useMessages({
+  chatId,
+  status,
+}: {
+  chatId: string;
+  status: UseChatHelpers['status'];
+}) {
+  const {
+    containerRef,
+    endRef,
+    isAtBottom,
+    scrollToBottom,
+    onViewportEnter,
+    onViewportLeave,
+  } = useScrollToBottom();
+
+  const [hasSentMessage, setHasSentMessage] = useState(false);
+
+  useEffect(() => {
+    if (chatId) {
+      scrollToBottom('instant');
+      setHasSentMessage(false);
+    }
+  }, [chatId, scrollToBottom]);
+
+  useEffect(() => {
+    if (status === 'submitted') {
+      setHasSentMessage(true);
+    }
+  }, [status]);
+
+  return {
+    containerRef,
+    endRef,
+    isAtBottom,
+    scrollToBottom,
+    onViewportEnter,
+    onViewportLeave,
+    hasSentMessage,
+  };
+}
+
+
+
+================================================
+FILE: hooks/use-mobile.tsx
+================================================
+import * as React from 'react';
+
+const MOBILE_BREAKPOINT = 768;
+
+export function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(
+    undefined,
+  );
+
+  React.useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    const onChange = () => {
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    };
+    mql.addEventListener('change', onChange);
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+
+  return !!isMobile;
+}
+
+
+
+================================================
+FILE: hooks/use-scroll-to-bottom.tsx
+================================================
+import useSWR from 'swr';
+import { useRef, useEffect, useCallback } from 'react';
+
+type ScrollFlag = ScrollBehavior | false;
+
+export function useScrollToBottom() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  const { data: isAtBottom = false, mutate: setIsAtBottom } = useSWR(
+    'messages:is-at-bottom',
+    null,
+    { fallbackData: false },
+  );
+
+  const { data: scrollBehavior = false, mutate: setScrollBehavior } =
+    useSWR<ScrollFlag>('messages:should-scroll', null, { fallbackData: false });
+
+  useEffect(() => {
+    if (scrollBehavior) {
+      endRef.current?.scrollIntoView({ behavior: scrollBehavior });
+      setScrollBehavior(false);
+    }
+  }, [setScrollBehavior, scrollBehavior]);
+
+  const scrollToBottom = useCallback(
+    (scrollBehavior: ScrollBehavior = 'smooth') => {
+      setScrollBehavior(scrollBehavior);
+    },
+    [setScrollBehavior],
+  );
+
+  function onViewportEnter() {
+    setIsAtBottom(true);
+  }
+
+  function onViewportLeave() {
+    setIsAtBottom(false);
+  }
+
+  return {
+    containerRef,
+    endRef,
+    isAtBottom,
+    scrollToBottom,
+    onViewportEnter,
+    onViewportLeave,
+  };
+}
+
+
+
+
+
+
+================================================
+FILE: lib/ai/tools/request-suggestions.ts
+================================================
+import { z } from 'zod';
+import { Session } from 'next-auth';
+import { DataStreamWriter, streamObject, tool } from 'ai';
+import { getDocumentById, saveSuggestions } from '@/lib/db/queries';
+import { Suggestion } from '@/lib/db/schema';
+import { generateUUID } from '@/lib/utils';
+import { myProvider } from '../providers';
+
+interface RequestSuggestionsProps {
+  session: Session;
+  dataStream: DataStreamWriter;
+}
+
+export const requestSuggestions = ({
+  session,
+  dataStream,
+}: RequestSuggestionsProps) =>
+  tool({
+    description: 'Request suggestions for a document',
+    parameters: z.object({
+      documentId: z
+        .string()
+        .describe('The ID of the document to request edits'),
+    }),
+    execute: async ({ documentId }) => {
+      const document = await getDocumentById({ id: documentId });
+
+      if (!document || !document.content) {
+        return {
+          error: 'Document not found',
+        };
+      }
+
+      const suggestions: Array<
+        Omit<Suggestion, 'userId' | 'createdAt' | 'documentCreatedAt'>
+      > = [];
+
+      const { elementStream } = streamObject({
+        model: myProvider.languageModel('artifact-model'),
+        system:
+          'You are a help writing assistant. Given a piece of writing, please offer suggestions to improve the piece of writing and describe the change. It is very important for the edits to contain full sentences instead of just words. Max 5 suggestions.',
+        prompt: document.content,
+        output: 'array',
+        schema: z.object({
+          originalSentence: z.string().describe('The original sentence'),
+          suggestedSentence: z.string().describe('The suggested sentence'),
+          description: z.string().describe('The description of the suggestion'),
+        }),
+      });
+
+      for await (const element of elementStream) {
+        const suggestion = {
+          originalText: element.originalSentence,
+          suggestedText: element.suggestedSentence,
+          description: element.description,
+          id: generateUUID(),
+          documentId: documentId,
+          isResolved: false,
+        };
+
+        dataStream.writeData({
+          type: 'suggestion',
+          content: suggestion,
+        });
+
+        suggestions.push(suggestion);
+      }
+
+      if (session.user?.id) {
+        const userId = session.user.id;
+
+        await saveSuggestions({
+          suggestions: suggestions.map((suggestion) => ({
+            ...suggestion,
+            userId,
+            createdAt: new Date(),
+            documentCreatedAt: document.createdAt,
+          })),
+        });
+      }
+
+      return {
+        id: documentId,
+        title: document.title,
+        kind: document.kind,
+        message: 'Suggestions have been added to the document',
+      };
+    },
+  });
+
+
+
+================================================
+FILE: lib/ai/tools/update-document.ts
+================================================
+import { DataStreamWriter, tool } from 'ai';
+import { Session } from 'next-auth';
+import { z } from 'zod';
+import { getDocumentById, saveDocument } from '@/lib/db/queries';
+import { documentHandlersByArtifactKind } from '@/lib/artifacts/server';
+
+interface UpdateDocumentProps {
+  session: Session;
+  dataStream: DataStreamWriter;
+}
+
+export const updateDocument = ({ session, dataStream }: UpdateDocumentProps) =>
+  tool({
+    description: 'Update a document with the given description.',
+    parameters: z.object({
+      id: z.string().describe('The ID of the document to update'),
+      description: z
+        .string()
+        .describe('The description of changes that need to be made'),
+    }),
+    execute: async ({ id, description }) => {
+      const document = await getDocumentById({ id });
+
+      if (!document) {
+        return {
+          error: 'Document not found',
+        };
+      }
+
+      dataStream.writeData({
+        type: 'clear',
+        content: document.title,
+      });
+
+      const documentHandler = documentHandlersByArtifactKind.find(
+        (documentHandlerByArtifactKind) =>
+          documentHandlerByArtifactKind.kind === document.kind,
+      );
+
+      if (!documentHandler) {
+        throw new Error(`No document handler found for kind: ${document.kind}`);
+      }
+
+      await documentHandler.onUpdateDocument({
+        document,
+        description,
+        dataStream,
+        session,
+      });
+
+      dataStream.writeData({ type: 'finish', content: '' });
+
+      return {
+        id,
+        title: document.title,
+        kind: document.kind,
+        content: 'The document has been updated successfully.',
+      };
+    },
+  });
+
+
+
+
+      '0:"It\'s "',
+      '0:"just "',
+      '0:"blue "',
+      '0:"duh! "',
+      'e:{"finishReason":"stop","usage":{"promptTokens":3,"completionTokens":10},"isContinued":false}',
+      'd:{"finishReason":"stop","usage":{"promptTokens":3,"completionTokens":10}}',
+    ],
+  },
+  GRASS: {
+    MESSAGE: {
+      id: generateUUID(),
+      createdAt: new Date().toISOString(),
+      role: 'user',
+      content: 'Why is grass green?',
+      parts: [{ type: 'text', text: 'Why is grass green?' }],
+    },
+
+    OUTPUT_STREAM: [
+      '0:"It\'s "',
+      '0:"just "',
+      '0:"green "',
+      '0:"duh! "',
+      'e:{"finishReason":"stop","usage":{"promptTokens":3,"completionTokens":10},"isContinued":false}',
+      'd:{"finishReason":"stop","usage":{"promptTokens":3,"completionTokens":10}}',
+    ],
+  },
+};
+
+
+
+
+
+
