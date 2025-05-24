@@ -3,7 +3,7 @@
 import type { UIMessage } from 'ai';
 import cx from 'classnames';
 import { AnimatePresence, motion } from 'framer-motion';
-import { memo, useState } from 'react';
+import { memo, useState, useEffect } from 'react';
 import type { Vote } from '@/lib/db/schema';
 import { DocumentToolCall, DocumentToolResult } from './document';
 import { PencilEditIcon, SparklesIcon } from './icons';
@@ -21,6 +21,7 @@ import { MessageReasoning } from './message-reasoning';
 import type { UseChatHelpers } from '@ai-sdk/react';
 import Lottie from 'lottie-react';
 import animationData from '@/public/lottie/Animation - 1748017463409.json';
+import { ViewSourcesButton } from './view-sources-button';
 
 const PurePreviewMessage = ({
   chatId,
@@ -32,6 +33,10 @@ const PurePreviewMessage = ({
   isReadonly,
   requiresScrollPadding,
   append,
+  onViewSources,
+  messagesSources,
+  sourcesOpen,
+  currentSources,
 }: {
   chatId: string;
   message: UIMessage;
@@ -42,8 +47,34 @@ const PurePreviewMessage = ({
   isReadonly: boolean;
   requiresScrollPadding: boolean;
   append?: UseChatHelpers['append'];
+  onViewSources?: (sources: any[]) => void;
+  messagesSources?: Record<string, any[]>;
+  sourcesOpen?: boolean;
+  currentSources?: any[];
 }) => {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
+
+  // Get sources for this specific message
+  const messageSources = messagesSources?.[message.id] || [];
+  
+  // Fallback: check for citation patterns in text if no sources found
+  const hasCitationPattern = (text: string) => {
+    return /\[Source \d+\]/g.test(text);
+  };
+
+  // Debug logging
+  useEffect(() => {
+    if (message.role === 'assistant') {
+      console.log('Assistant message sources:', {
+        messageId: message.id,
+        sourcesCount: messageSources.length,
+        allMessagesSources: messagesSources,
+        hasPatterns: message.parts?.some(part => 
+          part.type === 'text' && hasCitationPattern(part.text)
+        )
+      });
+    }
+  }, [message, messageSources, messagesSources]);
 
   return (
     <AnimatePresence>
@@ -138,12 +169,63 @@ const PurePreviewMessage = ({
                       <div
                         data-testid="message-content"
                         className={cn('flex flex-col gap-4 overflow-x-auto', {
-                          'bg-primary text-primary-foreground px-3 py-2 rounded-xl':
+                          'bg-gray-100 text-gray-900 px-3 py-2 rounded-xl border border-gray-200':
                             message.role === 'user',
                           'text-foreground dark:text-zinc-200': message.role === 'assistant',
                         })}
                       >
                         <Markdown>{sanitizeText(part.text)}</Markdown>
+                        
+                        {/* Add View Sources button for assistant messages with citations */}
+                        {message.role === 'assistant' && (() => {
+                          const hasPatterns = hasCitationPattern(part.text);
+                          const shouldShowButton = messageSources.length > 0 || hasPatterns;
+                          const isThisMessageOpen = sourcesOpen && JSON.stringify(currentSources) === JSON.stringify(messageSources);
+                          
+                          // If we have real sources, use them
+                          if (messageSources.length > 0) {
+                            return (
+                              <ViewSourcesButton 
+                                sources={messageSources} 
+                                className="mt-2" 
+                                onViewSources={onViewSources}
+                                isOpen={isThisMessageOpen}
+                              />
+                            );
+                          }
+                          
+                          // If we have citation patterns but no sources yet (timing issue), 
+                          // extract the highest source number from patterns
+                          if (hasPatterns) {
+                            const sourceMatches = part.text.match(/\[Source (\d+)\]/g) || [];
+                            const sourceNumbers = sourceMatches.map(match => 
+                              parseInt(match.match(/\d+/)?.[0] || '0', 10)
+                            );
+                            const maxSourceNumber = sourceNumbers.length > 0 ? Math.max(...sourceNumbers) : 0;
+                            
+                            // Create placeholder sources based on citation patterns
+                            const placeholderSources = Array.from({ length: maxSourceNumber }, (_, i) => ({
+                              messageId: `placeholder-${i + 1}`,
+                              content: `Source ${i + 1} content will be available shortly...`,
+                              channelName: 'Loading...',
+                              userName: 'Loading...',
+                              timestamp: Date.now().toString(),
+                              similarity: 0.8,
+                              sourceIndex: i + 1
+                            }));
+                            
+                            return (
+                              <ViewSourcesButton 
+                                sources={placeholderSources}
+                                className="mt-2" 
+                                onViewSources={onViewSources}
+                                isOpen={isThisMessageOpen}
+                              />
+                            );
+                          }
+                          
+                          return null;
+                        })()}
       </div>
     </div>
   );
@@ -271,7 +353,7 @@ export const ThinkingMessage = () => {
   return (
     <motion.div
       data-testid="message-assistant-loading"
-      className="w-full mx-auto max-w-5xl px-4 group/message min-h-96"
+      className="w-full mx-auto px-4 group/message max-w-4xl"
       initial={{ y: 5, opacity: 0 }}
       animate={{ y: 0, opacity: 1, transition: { delay: 1 } }}
       data-role={role}

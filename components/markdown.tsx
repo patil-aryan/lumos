@@ -57,13 +57,13 @@ const TableWrapper = ({ node, children, ...props }: any) => {
     <div className="relative group my-4 max-w-full">
       <button
         onClick={copyTableAsMarkdown}
-        className="absolute -top-8 right-0 p-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 hover:text-white rounded-md text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1 z-10"
+        className="absolute -top-8 right-0 p-1.5 bg-gray-600 hover:bg-gray-500 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-gray-100 dark:text-zinc-300 hover:text-white dark:hover:text-white rounded-md text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1 z-10"
       >
         <CopyIcon copied={isCopied} />
         {isCopied ? 'Copied!' : 'Copy Table'}
       </button>
-      <div className="overflow-x-auto border border-zinc-700 rounded-lg bg-zinc-900 max-w-full">
-        <table {...props} className="min-w-full divide-y divide-zinc-700 text-sm">
+      <div className="overflow-x-auto border border-gray-300 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-900 max-w-full">
+        <table {...props} className="min-w-full divide-y divide-gray-300 dark:divide-zinc-700 text-sm">
           {children}
         </table>
       </div>
@@ -80,11 +80,11 @@ const components: Partial<Components> = {
     </div>
   ),
   table: TableWrapper,
-  thead: ({ node, children, ...props }) => <thead className="bg-zinc-800 dark:bg-zinc-700" {...props}>{children}</thead>,
-  tbody: ({ node, children, ...props }) => <tbody className="divide-y divide-zinc-700 dark:divide-zinc-600 bg-zinc-900 dark:bg-zinc-800" {...props}>{children}</tbody>,
-  tr: ({ node, children, ...props }) => <tr className="hover:bg-zinc-800 dark:hover:bg-zinc-700 transition-colors" {...props}>{children}</tr>,
-  th: ({ node, children, ...props }) => <th scope="col" className="px-4 py-2.5 text-left font-medium text-zinc-300 dark:text-zinc-200 tracking-wider" {...props}>{children}</th>,
-  td: ({ node, children, ...props }) => <td className="px-4 py-2.5 whitespace-nowrap text-zinc-400 dark:text-zinc-300" {...props}>{children}</td>,
+  thead: ({ node, children, ...props }) => <thead className="bg-gray-200 dark:bg-zinc-800" {...props}>{children}</thead>,
+  tbody: ({ node, children, ...props }) => <tbody className="divide-y divide-gray-300 dark:divide-zinc-700 bg-gray-50 dark:bg-zinc-900" {...props}>{children}</tbody>,
+  tr: ({ node, children, ...props }) => <tr className="hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors" {...props}>{children}</tr>,
+  th: ({ node, children, ...props }) => <th scope="col" className="px-4 py-2.5 text-left font-medium text-gray-700 dark:text-zinc-300 tracking-wider" {...props}>{children}</th>,
+  td: ({ node, children, ...props }) => <td className="px-4 py-2.5 whitespace-nowrap text-gray-600 dark:text-zinc-400" {...props}>{children}</td>,
   p: ({ node, children, ...props }) => {
     return (
       <div className="my-2 text-foreground dark:text-zinc-200" {...props}>

@@ -9,6 +9,8 @@ import {
   primaryKey,
   foreignKey,
   boolean,
+  vector,
+  index,
 } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('User', {
@@ -277,3 +279,23 @@ export type SlackUser = InferSelectModel<typeof slackUser>;
 export type SlackChannel = InferSelectModel<typeof slackChannel>;
 export type SlackMessage = InferSelectModel<typeof slackMessage>;
 export type SlackFile = InferSelectModel<typeof slackFile>;
+
+// Vector embeddings for Slack messages (RAG)
+export const slackMessageEmbedding = pgTable('SlackMessageEmbedding', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  messageId: uuid('messageId')
+    .notNull()
+    .references(() => slackMessage.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspaceId')
+    .notNull()
+    .references(() => slackWorkspace.id),
+  content: text('content').notNull(), // The message text that was embedded
+  contextInfo: json('contextInfo').notNull(), // Channel name, username, timestamp, etc.
+  embedding: vector('embedding', { dimensions: 1536 }), // OpenAI text-embedding-ada-002 dimension
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+}, (table) => [
+  // Create vector similarity index for fast retrieval
+  index('slack_embedding_cosine_idx').using('hnsw', table.embedding.op('vector_cosine_ops')),
+]);
+
+export type SlackMessageEmbedding = InferSelectModel<typeof slackMessageEmbedding>;

@@ -86,62 +86,62 @@ export class SlackSyncService {
     let hasMore = true;
 
     while (hasMore) {
-      const messages = await this.client.getChannelHistory(channelId, oldest);
-      
-      if (messages.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      progress.totalMessages += messages.length;
-
-      for (const message of messages) {
-        // Skip messages without text content
-        if (!message.text && (!message.files || message.files.length === 0)) {
-          continue;
+        const messages = await this.client.getChannelHistory(channelId, oldest);
+        
+        if (messages.length === 0) {
+          hasMore = false;
+          break;
         }
 
-        // Check if message already exists
-        const messageExists = await SlackDatabaseService.checkMessageExists(
-          message.ts,
-          this.workspace.id
-        );
+        progress.totalMessages += messages.length;
+
+        for (const message of messages) {
+        // Skip messages without text content
+          if (!message.text && (!message.files || message.files.length === 0)) {
+            continue;
+          }
+
+            // Check if message already exists
+            const messageExists = await SlackDatabaseService.checkMessageExists(
+              message.ts,
+              this.workspace.id
+            );
 
         if (!messageExists) {
           // Get user info for better context
-          const userInfo = await this.client.getUserInfo(message.user);
+              const userInfo = await this.client.getUserInfo(message.user);
           const userName = userInfo?.real_name || userInfo?.name || message.user;
 
-          // Save message
-          const savedMessage = await SlackDatabaseService.saveMessage(
-            message,
-            this.workspace.id,
-            channelId,
-            channelName,
-            userName
-          );
+            // Save message
+            const savedMessage = await SlackDatabaseService.saveMessage(
+              message,
+              this.workspace.id,
+              channelId,
+              channelName,
+              userName
+            );
 
-          // Process files in the message
-          if (message.files && message.files.length > 0) {
-            progress.totalFiles += message.files.length;
-            
-            for (const file of message.files) {
-              await this.processFile(file, savedMessage.id, progress, onProgress);
+            // Process files in the message
+            if (message.files && message.files.length > 0) {
+              progress.totalFiles += message.files.length;
+              
+              for (const file of message.files) {
+                await this.processFile(file, savedMessage.id, progress, onProgress);
+              }
             }
           }
+
+          progress.processedMessages++;
+          onProgress?.(progress);
         }
 
-        progress.processedMessages++;
-        onProgress?.(progress);
-      }
-
-      // Set oldest to the last message timestamp for pagination
-      oldest = messages[messages.length - 1].ts;
-      
-      // If we got fewer messages than requested, we've reached the end
+        // Set oldest to the last message timestamp for pagination
+        oldest = messages[messages.length - 1].ts;
+        
+        // If we got fewer messages than requested, we've reached the end
       if (messages.length < 200) {
-        hasMore = false;
-      }
+          hasMore = false;
+        }
     }
   }
 
@@ -221,8 +221,8 @@ export class SlackSyncService {
     // You can extend this to handle PDF, Word docs, etc. with appropriate libraries
     if (mimetype?.startsWith('text/') || this.isTextFile(mimetype, filetype)) {
       return buffer.toString('utf-8');
-    }
-    
+  }
+
     return '';
   }
 

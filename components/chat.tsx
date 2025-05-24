@@ -23,6 +23,7 @@ import { ChatSDKError } from '@/lib/errors';
 import { motion } from 'framer-motion';
 import { SourceDialog } from './source-dialog';
 import { useSidebar } from '@/components/ui/sidebar';
+import { SourcesSidebar } from './sources-sidebar';
 
 export function Chat({
   id,
@@ -47,8 +48,14 @@ export function Chat({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isMessagesStarted, setIsMessagesStarted] = useState(initialMessages.length > 0);
-  const [selectedSources, setSelectedSources] = useState<string[]>(['all']);
+  const [selectedSources, setSelectedSources] = useState<string[]>(['general']);
   const [isMobile, setIsMobile] = useState(false);
+  
+  // Sources sidebar state
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [currentSources, setCurrentSources] = useState<any[]>([]);
+  const [messagesSources, setMessagesSources] = useState<Record<string, any[]>>({});
+  const pendingSourcesRef = useRef<any[] | null>(null);
   
   // Get sidebar state
   const { open: sidebarOpen } = useSidebar();
@@ -57,6 +64,35 @@ export function Chat({
     chatId: id,
     initialVisibilityType,
   });
+
+  // Custom fetch function to intercept sources from headers
+  const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await fetchWithErrorHandlers(input, init);
+    
+    // Check for sources in response headers
+    const sourcesHeader = response.headers.get('X-Slack-Sources');
+    console.log('Headers check:', { sourcesHeader });
+    
+    if (sourcesHeader) {
+      try {
+        // Decode base64 sources (browser compatible)
+        const sourcesJson = atob(sourcesHeader);
+        const sources = JSON.parse(sourcesJson);
+        
+        console.log('Parsed sources from header:', sources);
+        
+        // Store sources to be associated with the next assistant message
+        if (sources.length > 0) {
+          pendingSourcesRef.current = sources;
+          console.log('Stored pending sources:', pendingSourcesRef.current);
+        }
+      } catch (error) {
+        console.error('Error parsing sources from headers:', error);
+      }
+    }
+    
+    return response;
+  };
 
   const {
     messages,
@@ -78,7 +114,7 @@ export function Chat({
     experimental_throttle: 100,
     sendExtraMessageFields: true,
     generateId: generateUUID,
-    fetch: fetchWithErrorHandlers,
+    fetch: customFetch,
     api: '/api/chat',
     experimental_prepareRequestBody: (body) => ({
       id,
@@ -195,18 +231,30 @@ export function Chat({
   const handleMessageSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() || attachments.length > 0) {
+      // Close sources sidebar when new message is sent
+      setSourcesOpen(false);
+      
       handleSubmit(e, {
         experimental_attachments: attachments
       });
-      if (!isMessagesStarted) {
-        setIsMessagesStarted(true);
-      }
-      // Reset textarea height after submitting
+      setAttachments([]);
+      
+      // Reset textarea height
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
-      // Clear attachments after sending
-      setAttachments([]);
+    }
+  };
+
+  // Function to handle sources from ViewSourcesButton
+  const handleViewSources = (sources: any[]) => {
+    // If sources sidebar is already open with the same sources, close it
+    if (sourcesOpen && JSON.stringify(currentSources) === JSON.stringify(sources)) {
+      setSourcesOpen(false);
+    } else {
+      // Otherwise, open with new sources
+      setCurrentSources(sources);
+      setSourcesOpen(true);
     }
   };
 
@@ -247,9 +295,44 @@ export function Chat({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // Associate pending sources with new assistant messages
+  useEffect(() => {
+    console.log('useEffect for sources association:', {
+      hasPendingSources: !!pendingSourcesRef.current,
+      pendingSources: pendingSourcesRef.current,
+      messagesLength: messages.length,
+      lastMessage: messages.length > 0 ? messages[messages.length - 1] : null,
+      currentMessagesSources: messagesSources
+    });
+    
+    if (pendingSourcesRef.current && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      console.log('Checking last message:', { 
+        messageId: lastMessage.id, 
+        role: lastMessage.role, 
+        alreadyHasSources: !!messagesSources[lastMessage.id] 
+      });
+      
+      // Associate sources with assistant messages, even if they already have placeholder sources
+      if (lastMessage.role === 'assistant') {
+        console.log('Associating sources with message:', lastMessage.id, pendingSourcesRef.current);
+        setMessagesSources(prev => ({
+          ...prev,
+          [lastMessage.id]: pendingSourcesRef.current!
+        }));
+        pendingSourcesRef.current = null; // Clear pending sources
+      }
+    }
+  }, [messages]);
+
   return (
     <>
-      <div className="flex flex-col min-w-0 h-dvh relative">
+      <div 
+        className="flex flex-col min-w-0 h-dvh relative transition-all duration-300"
+        style={{
+          marginRight: sourcesOpen ? '384px' : '0', // 384px = w-96 width
+        }}
+      >
         {!isMessagesStarted ? (
           <div className="flex-1 flex flex-col items-center justify-center px-4 py-8">
             <div className="w-full max-w-xl mx-auto">
@@ -376,6 +459,10 @@ export function Chat({
               isReadonly={isReadonly}
               isArtifactVisible={isArtifactVisible}
               append={append}
+              onViewSources={handleViewSources}
+              messagesSources={messagesSources}
+              sourcesOpen={sourcesOpen}
+              currentSources={currentSources}
             />
             <div ref={messagesEndRef} />
           </div>
@@ -387,8 +474,13 @@ export function Chat({
             className="fixed bottom-0 z-20 flex justify-center items-end p-4 transition-all duration-300"
             style={{
               left: isMobile ? '0' : (sidebarOpen ? '280px' : '72px'),
-              right: '0',
-              width: isMobile ? '100%' : (sidebarOpen ? 'calc(100% - 280px)' : 'calc(100% - 72px)'),
+              right: sourcesOpen ? '384px' : '0', // Account for sources sidebar
+              width: isMobile 
+                ? (sourcesOpen ? 'calc(100% - 384px)' : '100%')
+                : (sidebarOpen 
+                    ? (sourcesOpen ? 'calc(100% - 280px - 384px)' : 'calc(100% - 280px)')
+                    : (sourcesOpen ? 'calc(100% - 72px - 384px)' : 'calc(100% - 72px)')
+                  ),
             }}
           >
             <div className="w-full max-w-4xl mx-auto px-4">
@@ -493,6 +585,13 @@ export function Chat({
           </div>
         )}
       </div>
+
+      {/* Sources Sidebar */}
+      <SourcesSidebar
+        sources={currentSources}
+        isOpen={sourcesOpen}
+        onClose={() => setSourcesOpen(false)}
+      />
 
       {/* Artifact feature disabled */}
     </>

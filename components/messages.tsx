@@ -25,6 +25,10 @@ interface MessagesProps {
   isReadonly: boolean;
   isArtifactVisible: boolean;
   append?: UseChatHelpers['append'];
+  onViewSources?: (sources: any[]) => void;
+  messagesSources?: Record<string, any[]>;
+  sourcesOpen?: boolean;
+  currentSources?: any[];
 }
 
 function PureMessages({
@@ -36,6 +40,10 @@ function PureMessages({
   reload,
   isReadonly,
   append,
+  onViewSources,
+  messagesSources,
+  sourcesOpen,
+  currentSources,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -95,6 +103,10 @@ function PureMessages({
               hasSentMessage && index === messages.length - 1
             }
             append={append}
+            onViewSources={onViewSources}
+            messagesSources={messagesSources}
+            sourcesOpen={sourcesOpen}
+            currentSources={currentSources}
           />
         ))}
 

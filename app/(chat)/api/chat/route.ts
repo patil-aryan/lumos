@@ -19,7 +19,6 @@ import {
 } from '@/lib/db/queries';
 import { generateUUID, getTrailingMessageId } from '@/lib/utils';
 import { generateTitleFromUserMessage } from '../../actions';
-// Removed generateCode import - using direct code generation instead
 import { getWeather } from '@/lib/ai/tools/get-weather';
 import { isProductionEnvironment } from '@/lib/constants';
 import { myProvider } from '@/lib/ai/providers';
@@ -34,6 +33,25 @@ import { after } from 'next/server';
 import type { Chat } from '@/lib/db/schema';
 import { differenceInSeconds } from 'date-fns';
 import { ChatSDKError } from '@/lib/errors';
+import { findSimilarSlackMessages } from '@/lib/ai/embeddings';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { eq } from 'drizzle-orm';
+import { slackWorkspace } from '@/lib/db/schema';
+import { openai } from '@ai-sdk/openai';
+import { xai } from '@ai-sdk/xai';
+import {
+  convertToCoreMessages,
+  LanguageModel,
+  Message,
+  tool,
+} from 'ai';
+import { z } from 'zod';
+import { sql } from '@vercel/postgres';
+
+// Initialize database connection
+const client = postgres(process.env.POSTGRES_URL || '');
+const db = drizzle(client);
 
 export const maxDuration = 60;
 
@@ -210,8 +228,52 @@ export async function POST(request: Request) {
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
 
+    // Extract text content from message parts
+    const messageText = message.parts
+      ?.filter((part: any) => part.type === 'text')
+      ?.map((part: any) => part.text)
+      ?.join(' ') || '';
+
+    // Get Slack sources if Slack is selected
+    let slackSources: any[] = [];
+    if (selectedSources.includes('slack')) {
+      try {
+        // Get user's Slack workspace
+        const userWorkspaces = await db
+          .select()
+          .from(slackWorkspace)
+          .where(eq(slackWorkspace.userId, session.user.id))
+          .limit(1);
+
+        if (userWorkspaces.length > 0) {
+          const workspace = userWorkspaces[0];
+          
+          // Find relevant Slack messages
+          const similarMessages = await findSimilarSlackMessages(
+            messageText,
+            workspace.id,
+            5, // limit
+            0.7 // similarity threshold
+          );
+
+          // Format sources for frontend
+          slackSources = similarMessages.map((msg, index) => ({
+            messageId: msg.messageId,
+            content: msg.content,
+            channelName: msg.contextInfo.channelName,
+            userName: msg.contextInfo.userName,
+            timestamp: msg.contextInfo.timestamp,
+            similarity: msg.similarity,
+            sourceIndex: index + 1
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching Slack sources:', error);
+      }
+    }
+
     // Create a system message that includes information about selected sources
-    const systemMessage = getSystemPromptWithSources(selectedSources, selectedChatModel, requestHints);
+    const systemMessage = await getSystemPromptWithSources(selectedSources, selectedChatModel, requestHints, messageText, session.user.id);
 
     // Create the streaming response
     try {
@@ -273,7 +335,21 @@ export async function POST(request: Request) {
         experimental_transform: smoothStream({ chunking: 'word' }),
       });
 
-      return result.toDataStreamResponse();
+      // Add sources metadata to response headers (as a simple string, encoded)
+      const response = result.toDataStreamResponse();
+      if (slackSources.length > 0) {
+        // Encode sources as base64 to avoid character issues
+        const sourcesBase64 = Buffer.from(JSON.stringify(slackSources)).toString('base64');
+        console.log('Adding sources to response headers:', { 
+          sourcesCount: slackSources.length, 
+          sourcesBase64: sourcesBase64.substring(0, 100) + '...' 
+        });
+        response.headers.set('X-Slack-Sources', sourcesBase64);
+      } else {
+        console.log('No Slack sources found to add to headers');
+      }
+
+      return response;
     } catch (error) {
       console.error('Failed to create stream:', error);
       if (error instanceof ChatSDKError) {
@@ -305,16 +381,90 @@ export async function POST(request: Request) {
 }
 
 // Helper function to create a system prompt that includes information about selected sources
-function getSystemPromptWithSources(
+async function getSystemPromptWithSources(
   selectedSources: string[],
   selectedChatModel: string,
-  requestHints: RequestHints
-): string {
+  requestHints: RequestHints,
+  userMessage: string,
+  userId: string
+): Promise<string> {
   let basePrompt = systemPrompt({ selectedChatModel, requestHints });
   
-  // If 'all' is not selected, append information about which sources to use
-  if (!selectedSources.includes('all')) {
+  // If general is selected, use normal prompt without source restrictions
+  if (selectedSources.includes('general') && selectedSources.length === 1) {
+    return basePrompt; // No additional restrictions for general conversation
+  }
+  
+  // If Slack is the only selected source, enforce strict Slack-only scope
+  if (selectedSources.includes('slack') && !selectedSources.includes('all') && !selectedSources.includes('general')) {
+    basePrompt += `\n\nIMPORTANT CONSTRAINTS:
+- You can ONLY answer questions using information from the user's Slack workspace messages
+- If the question cannot be answered using Slack workspace information, politely explain that you can only access Slack data in this mode
+- Do not use any general knowledge or external information
+- Only reference information that comes from the Slack messages provided below`;
+  } else if (!selectedSources.includes('all') && !selectedSources.includes('general')) {
     basePrompt += `\n\nImportant: When answering, only use information from the following sources: ${selectedSources.join(', ')}.`;
+  }
+
+  // If Slack is selected as a source, add Slack context
+  if (selectedSources.includes('slack')) {
+    try {
+      // Get user's Slack workspace
+      const userWorkspaces = await db
+        .select()
+        .from(slackWorkspace)
+        .where(eq(slackWorkspace.userId, userId))
+        .limit(1);
+
+      if (userWorkspaces.length > 0) {
+        const workspace = userWorkspaces[0];
+        
+        // Find relevant Slack messages
+        const similarMessages = await findSimilarSlackMessages(
+          userMessage,
+          workspace.id,
+          5, // limit
+          0.7 // similarity threshold
+        );
+
+        if (similarMessages.length > 0) {
+          const slackContext = similarMessages.map((msg, index) => {
+            const contextInfo = msg.contextInfo;
+            return `[Source ${index + 1}] Channel: #${contextInfo.channelName} | User: ${contextInfo.userName} | Time: ${new Date(parseInt(contextInfo.timestamp) * 1000).toLocaleString()}
+Message: ${msg.content}`;
+          }).join('\n\n');
+
+          basePrompt += `\n\nSLACK WORKSPACE CONTEXT:
+The following are relevant messages from the user's Slack workspace that may help answer their question:
+
+${slackContext}
+
+When referencing information from these Slack messages, cite them using [Source X] format.`;
+        } else {
+          if (selectedSources.includes('slack') && !selectedSources.includes('all')) {
+            basePrompt += `\n\nSLACK WORKSPACE CONTEXT:
+No relevant messages found in the user's Slack workspace for this query. Since you're in Slack-only mode, you should inform the user that no relevant Slack information was found to answer their question.`;
+          } else {
+            basePrompt += `\n\nSLACK WORKSPACE CONTEXT:
+No relevant messages found in the user's Slack workspace for this query.`;
+          }
+        }
+      } else {
+        if (selectedSources.includes('slack') && !selectedSources.includes('all')) {
+          basePrompt += `\n\nSLACK WORKSPACE CONTEXT:
+No Slack workspace is connected. Since you're in Slack-only mode, you should inform the user that they need to connect their Slack workspace first.`;
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching Slack context:', error);
+      if (selectedSources.includes('slack') && !selectedSources.includes('all')) {
+        basePrompt += `\n\nSLACK WORKSPACE CONTEXT:
+Unable to retrieve Slack workspace context at this time. Since you're in Slack-only mode, you should inform the user about this technical issue.`;
+      } else {
+        basePrompt += `\n\nSLACK WORKSPACE CONTEXT:
+Unable to retrieve Slack workspace context at this time.`;
+      }
+    }
   }
   
   return basePrompt;

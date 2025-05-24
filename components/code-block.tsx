@@ -39,7 +39,7 @@ export function CodeBlock({
       <div className="relative group my-2">
         <button 
           onClick={copyToClipboard}
-          className="absolute top-2 right-2 p-1.5 bg-zinc-700 hover:bg-zinc-600 dark:bg-zinc-600 dark:hover:bg-zinc-500 text-zinc-300 hover:text-white dark:text-zinc-200 dark:hover:text-white rounded-md text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1"
+          className="absolute top-2 right-2 p-1.5 bg-gray-600 hover:bg-gray-500 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-gray-100 dark:text-zinc-300 hover:text-white dark:hover:text-white rounded-md text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1"
         >
           {isCopied ? (
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -49,13 +49,13 @@ export function CodeBlock({
           {isCopied ? 'Copied!' : 'Copy'}
         </button>
         {language && (
-          <span className="absolute top-2 left-2 bg-zinc-700 dark:bg-zinc-600 text-zinc-300 dark:text-zinc-200 text-xs px-2 py-0.5 rounded-md">
+          <span className="absolute top-2 left-2 bg-gray-600 dark:bg-zinc-700 text-gray-100 dark:text-zinc-300 text-xs px-2 py-0.5 rounded-md">
             {language}
           </span>
         )}
         <code 
           {...props}
-          className={`block text-sm w-full overflow-x-auto bg-zinc-900 dark:bg-zinc-800 p-4 pt-10 border border-zinc-700 dark:border-zinc-600 rounded-xl text-zinc-50 dark:text-zinc-100 whitespace-pre-wrap break-words`}
+          className={`block text-sm w-full overflow-x-auto bg-gray-100 dark:bg-zinc-900 p-4 pt-10 border border-gray-300 dark:border-zinc-700 rounded-xl text-gray-900 dark:text-zinc-50 whitespace-pre-wrap break-words`}
         >
           {children}
         </code>
