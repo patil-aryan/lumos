@@ -13,64 +13,40 @@ export async function middleware(request: NextRequest) {
     return new Response('pong', { status: 200 });
   }
 
-  if (pathname.startsWith('/api/auth')) {
+  // Skip auth for API routes and auth pages
+  if (pathname.startsWith('/api/auth') || pathname.startsWith('/login') || pathname.startsWith('/register')) {
     return NextResponse.next();
   }
 
-  // TEMPORARY: Bypass all auth in development to avoid tunneling issues
-  // Remove this when ready for production or when using real domains
-  if (isDevelopmentEnvironment) {
+  // Only apply auth middleware to protected routes
+  const protectedRoutes = ['/chat', '/integrations'];
+  const isProtectedRoute = protectedRoutes.some(route => pathname.startsWith(route));
+
+  // In development, only protect specific routes to avoid tunneling issues
+  if (isDevelopmentEnvironment && !isProtectedRoute) {
     return NextResponse.next();
   }
 
-  // Skip auth for integrations and other API routes during development
-  if (isDevelopmentEnvironment && (pathname.startsWith('/integrations') || pathname.startsWith('/api/slack'))) {
-    return NextResponse.next();
-  }
+  // For protected routes or production, check authentication
+  if (isProtectedRoute || !isDevelopmentEnvironment) {
+    const token = await getToken({
+      req: request,
+      secret: process.env.AUTH_SECRET,
+      secureCookie: !isDevelopmentEnvironment,
+    });
 
-  const token = await getToken({
-    req: request,
-    secret: process.env.AUTH_SECRET,
-    secureCookie: !isDevelopmentEnvironment,
-  });
-
-  if (!token) {
-    // In development, be more permissive to avoid redirect loops with tunneling
-    if (isDevelopmentEnvironment) {
-      // Only redirect to guest auth from the root path to avoid loops
-      if (pathname === '/') {
-        try {
-          // Safely encode the redirect URL
-          const redirectUrl = encodeURIComponent(request.url);
-          const guestAuthUrl = new URL('/api/auth/guest', request.url);
-          guestAuthUrl.searchParams.set('redirectUrl', redirectUrl);
-          return NextResponse.redirect(guestAuthUrl);
-        } catch (urlError) {
-          console.warn('URL parsing error in middleware, skipping auth:', urlError);
-          return NextResponse.next();
-        }
-      }
-      // For other paths in development, just continue without auth
-      return NextResponse.next();
+    if (!token) {
+      // Redirect to login for protected routes
+      const loginUrl = new URL('/login', request.url);
+      return NextResponse.redirect(loginUrl);
     }
-    
-    // Production behavior - more robust URL handling
-    try {
-      const redirectUrl = encodeURIComponent(request.url);
-      const guestAuthUrl = new URL('/api/auth/guest', request.url);
-      guestAuthUrl.searchParams.set('redirectUrl', redirectUrl);
-      return NextResponse.redirect(guestAuthUrl);
-    } catch (urlError) {
-      console.error('URL parsing error in production middleware:', urlError);
-      // Fallback to simple guest auth without redirect
-      return NextResponse.redirect(new URL('/api/auth/guest', request.url));
+
+    const isGuest = guestRegex.test(token?.email ?? '');
+
+    // Redirect logged-in users away from auth pages
+    if (token && !isGuest && ['/login', '/register'].includes(pathname)) {
+      return NextResponse.redirect(new URL('/integrations', request.url));
     }
-  }
-
-  const isGuest = guestRegex.test(token?.email ?? '');
-
-  if (token && !isGuest && ['/login', '/register'].includes(pathname)) {
-    return NextResponse.redirect(new URL('/', request.url));
   }
 
   return NextResponse.next();

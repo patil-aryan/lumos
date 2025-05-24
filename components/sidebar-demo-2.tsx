@@ -8,7 +8,7 @@ import { useSession } from "next-auth/react";
 // Inner component that has access to sidebar context
 function SidebarLayoutInner({ children }: { children: React.ReactNode }) {
   const { open } = useSidebar();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
 
   // Update CSS variable when sidebar state changes
   useEffect(() => {
@@ -21,6 +21,12 @@ function SidebarLayoutInner({ children }: { children: React.ReactNode }) {
     });
     window.dispatchEvent(event);
   }, [open]);
+
+  // Debug logging
+  useEffect(() => {
+    console.log('SidebarLayoutInner - Session status:', status);
+    console.log('SidebarLayoutInner - Session data:', session);
+  }, [session, status]);
 
   return (
     <div className="flex w-full h-screen bg-background">

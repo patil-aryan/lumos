@@ -57,6 +57,13 @@
       "when": 1747975942062,
       "tag": "0007_plain_flatman",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1748038236397,
+      "tag": "0008_outstanding_giant_girl",
+      "breakpoints": true
     }
   ]
 }

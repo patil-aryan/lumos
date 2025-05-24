@@ -25,14 +25,47 @@ export const login = async (
       password: formData.get('password'),
     });
 
-    await signIn('credentials', {
+    console.log('Attempting login for:', validatedData.email);
+
+    const result = await signIn('credentials', {
       email: validatedData.email,
       password: validatedData.password,
       redirect: false,
+      redirectTo: '/integrations',
     });
 
+    console.log('SignIn result:', result);
+
+    // NextAuth can return different things:
+    // - null/undefined for success
+    // - object with error property for failure  
+    // - URL string for redirect
+    if (result === null || result === undefined) {
+      console.log('Login successful (null/undefined result)');
+      return { status: 'success' };
+    }
+
+    if (typeof result === 'string') {
+      // If it's a URL string, check if it contains error
+      if (result.includes('error=')) {
+        console.log('Login failed - error in URL:', result);
+        return { status: 'failed' };
+      }
+      console.log('Login successful (URL result)');
+      return { status: 'success' };
+    }
+
+    if (typeof result === 'object' && result.error) {
+      console.log('SignIn error:', result.error);
+      return { status: 'failed' };
+    }
+
+    // If we get here, assume success
+    console.log('Login successful (fallback)');
     return { status: 'success' };
   } catch (error) {
+    console.error('Login action error:', error);
+    
     if (error instanceof z.ZodError) {
       return { status: 'invalid_data' };
     }

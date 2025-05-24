@@ -551,12 +551,21 @@ export function AppSidebar({ user }: { user?: User }) {
   const pathname = usePathname();
   const router = useRouter();
 
+  // Debug logging
+  useEffect(() => {
+    console.log('AppSidebar - User:', user);
+    console.log('AppSidebar - Sidebar open:', open);
+  }, [user, open]);
+
   const handleNewChat = () => {
     router.push('/');
   };
 
   return (
     <>
+      {/* Debug indicator - always visible */}
+    
+      
       <DesktopSidebar className="group bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-r border-slate-200/50 dark:border-slate-800/50">
         <SidebarBody className="flex flex-col h-full">
           {/* Header with Logo */}

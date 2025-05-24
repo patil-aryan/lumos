@@ -78,44 +78,70 @@ export class SlackClient {
     }
   }
 
-  async getChannels(): Promise<SlackChannel[]> {
+  async getChannels(): Promise<any[]> {
     try {
       const result = await this.client.conversations.list({
-        types: 'public_channel,private_channel,im,mpim',
+        exclude_archived: true,
+        types: 'public_channel,private_channel',
         limit: 200,
       });
-
-      return (result.channels || []) as SlackChannel[];
+      return result.channels || [];
     } catch (error) {
       console.error('Error fetching channels:', error);
       throw error;
     }
   }
 
-  async getChannelHistory(channelId: string, oldest?: string): Promise<SlackMessage[]> {
+  async getUsers(cursor?: string): Promise<{ 
+    members: any[], 
+    response_metadata?: { next_cursor?: string } 
+  }> {
     try {
-      const result = await this.client.conversations.history({
-        channel: channelId,
-        oldest,
+      const params: any = {
         limit: 200,
-      });
+      };
+      
+      if (cursor) {
+        params.cursor = cursor;
+      }
 
-      return (result.messages || []) as SlackMessage[];
+      const result = await this.client.users.list(params);
+      return {
+        members: result.members || [],
+        response_metadata: result.response_metadata,
+      };
     } catch (error) {
-      console.error(`Error fetching history for channel ${channelId}:`, error);
+      console.error('Error fetching users:', error);
       throw error;
     }
   }
 
-  async getUserInfo(userId: string) {
+  async getUserInfo(userId: string): Promise<any> {
     try {
-      const result = await this.client.users.info({
-        user: userId,
-      });
+      const result = await this.client.users.info({ user: userId });
       return result.user;
     } catch (error) {
-      console.error(`Error fetching user info for ${userId}:`, error);
+      console.warn(`Could not get user info for ${userId}:`, error);
       return null;
+    }
+  }
+
+  async getChannelHistory(channelId: string, oldest?: string): Promise<SlackMessage[]> {
+    try {
+      const params: any = {
+        channel: channelId,
+        limit: 100,
+      };
+      
+      if (oldest) {
+        params.oldest = oldest;
+      }
+
+      const result = await this.client.conversations.history(params);
+      return (result.messages || []) as SlackMessage[];
+    } catch (error) {
+      console.error(`Error fetching history for channel ${channelId}:`, error);
+      throw error;
     }
   }
 
@@ -146,6 +172,38 @@ export class SlackClient {
     } catch (error) {
       console.error('Error fetching files:', error);
       throw error;
+    }
+  }
+
+  async getChannelInfo(channelId: string): Promise<any> {
+    try {
+      const result = await this.client.conversations.info({ 
+        channel: channelId,
+        include_num_members: true 
+      });
+      return result.channel;
+    } catch (error) {
+      console.warn(`Could not get channel info for ${channelId}:`, error);
+      return null;
+    }
+  }
+
+  async checkBotMembership(channelId: string): Promise<{ isMember: boolean; error?: string }> {
+    try {
+      // Try to get channel info - this will fail if bot is not a member
+      const result = await this.client.conversations.info({ 
+        channel: channelId,
+        include_num_members: true 
+      });
+      return { isMember: true };
+    } catch (error: any) {
+      if (error?.data?.error === 'not_in_channel') {
+        return { isMember: false, error: 'not_in_channel' };
+      } else if (error?.data?.error === 'channel_not_found') {
+        return { isMember: false, error: 'channel_not_found' };
+      } else {
+        return { isMember: false, error: error?.data?.error || 'unknown' };
+      }
     }
   }
 } 

@@ -182,9 +182,54 @@ export const slackWorkspace = pgTable('SlackWorkspace', {
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
   isActive: boolean('isActive').notNull().default(true),
+  // New fields for sync tracking
+  syncStartDate: timestamp('syncStartDate'), // When we started syncing (6 months back from first sync)
+  lastSyncAt: timestamp('lastSyncAt'), // Last successful sync
+  totalChannels: varchar('totalChannels', { length: 16 }).default('0'),
+  totalUsers: varchar('totalUsers', { length: 16 }).default('0'),
+  syncSettings: json('syncSettings'), // For future channel selection
 });
 
-export type SlackWorkspace = InferSelectModel<typeof slackWorkspace>;
+export const slackUser = pgTable('SlackUser', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  userId: varchar('userId', { length: 32 }).notNull(), // Slack user ID
+  workspaceId: uuid('workspaceId')
+    .notNull()
+    .references(() => slackWorkspace.id),
+  username: text('username'),
+  realName: text('realName'),
+  displayName: text('displayName'),
+  email: text('email'),
+  title: text('title'),
+  phone: text('phone'),
+  isBot: boolean('isBot').notNull().default(false),
+  isAdmin: boolean('isAdmin').notNull().default(false),
+  isOwner: boolean('isOwner').notNull().default(false),
+  isDeleted: boolean('isDeleted').notNull().default(false),
+  timezone: text('timezone'),
+  profileImage: text('profileImage'),
+  status: text('status'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  metadata: json('metadata'), // Full Slack user object
+});
+
+export const slackChannel = pgTable('SlackChannel', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  channelId: varchar('channelId', { length: 32 }).notNull(),
+  workspaceId: uuid('workspaceId')
+    .notNull()
+    .references(() => slackWorkspace.id),
+  name: text('name').notNull(),
+  purpose: text('purpose'),
+  topic: text('topic'),
+  isPrivate: boolean('isPrivate').notNull().default(false),
+  isArchived: boolean('isArchived').notNull().default(false),
+  memberCount: varchar('memberCount', { length: 16 }).default('0'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  metadata: json('metadata'), // Full Slack channel object
+});
 
 export const slackMessage = pgTable('SlackMessage', {
   id: uuid('id').primaryKey().notNull().defaultRandom(),
@@ -204,8 +249,6 @@ export const slackMessage = pgTable('SlackMessage', {
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   metadata: json('metadata'),
 });
-
-export type SlackMessage = InferSelectModel<typeof slackMessage>;
 
 export const slackFile = pgTable('SlackFile', {
   id: uuid('id').primaryKey().notNull().defaultRandom(),
@@ -228,4 +271,9 @@ export const slackFile = pgTable('SlackFile', {
   metadata: json('metadata'),
 });
 
+// Export types for all Slack tables
+export type SlackWorkspace = InferSelectModel<typeof slackWorkspace>;
+export type SlackUser = InferSelectModel<typeof slackUser>;
+export type SlackChannel = InferSelectModel<typeof slackChannel>;
+export type SlackMessage = InferSelectModel<typeof slackMessage>;
 export type SlackFile = InferSelectModel<typeof slackFile>;

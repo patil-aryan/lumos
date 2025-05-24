@@ -2,344 +2,353 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { useToast } from '@/hooks/use-toast';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 
-// Simple icon components to avoid import issues
-const SpinnerIcon = () => (
-  <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-);
-
-const CheckIcon = () => (
-  <div className="w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
-    <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
-      <path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
-  </div>
-);
-
-// Typing for integration items
-interface IntegrationItem {
+interface Integration {
   id: string;
   name: string;
   description: string;
-  icon: string;
+  logoUrl: string;
+  fallbackColor: string;
   connected: boolean;
-  tags: string[];
-  workspaces?: SlackWorkspace[];
+  connectedUser?: string;
+  workspaceData?: any; // For Slack workspace info
 }
 
 interface SlackWorkspace {
   id: string;
+  teamId: string;
   teamName: string;
+  isActive: boolean;
+  createdAt: string;
   lastSyncAt: string | null;
+  syncStartDate: string | null;
+  stats: {
+    totalUsers: number;
+    totalChannels: number;
+    totalMessages: number;
+    totalFiles: number;
+  };
   hasData: boolean;
+  syncStatus: 'recent' | 'stale' | 'never';
 }
 
+interface SlackData {
+  success: boolean;
+  workspaces: SlackWorkspace[];
+  totalWorkspaces: number;
+}
+
+const baseIntegrations: Omit<Integration, 'connected' | 'connectedUser' | 'workspaceData'>[] = [
+  {
+    id: 'slack',
+    name: 'Slack',
+    description: 'Connect your Slack workspace to sync messages, channels, and team communications.',
+    logoUrl: 'https://cdnlogo.com/logos/s/21/slack.svg',
+    fallbackColor: '#4A154B',
+  },
+  {
+    id: 'jira',
+    name: 'Jira',
+    description: 'Sync project management data, issues, and workflows from your Jira workspace.',
+    logoUrl: 'https://cdnlogo.com/logos/j/69/jira.svg',
+    fallbackColor: '#0052CC',
+  },
+  {
+    id: 'confluence',
+    name: 'Confluence',
+    description: 'Import documentation, pages, and knowledge base content from Confluence.',
+    logoUrl: 'https://cdnlogo.com/logos/c/82/confluence.svg',
+    fallbackColor: '#0052CC',
+  },
+];
+
 export default function IntegrationsPage() {
-  const { toast } = useToast();
-  const [loading, setLoading] = useState<string | null>(null);
-  const [syncProgress, setSyncProgress] = useState<{[key: string]: number}>({});
-  const [slackWorkspaces, setSlackWorkspaces] = useState<SlackWorkspace[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>(
+    baseIntegrations.map(base => ({ ...base, connected: false }))
+  );
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [logoErrors, setLogoErrors] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  // Load Slack workspaces on mount
-  useEffect(() => {
-    loadSlackWorkspaces();
-  }, []);
-
-  const loadSlackWorkspaces = async () => {
+  // Fetch Slack connection status
+  const fetchSlackData = async () => {
     try {
-      const response = await fetch('/api/slack/sync');
+      const response = await fetch('/api/slack/data');
       if (response.ok) {
-        const workspaces = await response.json();
-        setSlackWorkspaces(workspaces);
+        const data: SlackData = await response.json();
+        
+        console.log('Slack data fetched:', data); // Debug log
+        
+        // Update Slack integration status
+        setIntegrations(prev => prev.map(integration => {
+          if (integration.id === 'slack') {
+            const isConnected = data.workspaces.length > 0;
+            console.log('Updating Slack integration:', { isConnected, workspaces: data.workspaces.length }); // Debug log
+            return {
+              ...integration,
+              connected: isConnected,
+              connectedUser: data.workspaces[0]?.teamName || undefined,
+              workspaceData: data
+            };
+          }
+          return integration;
+        }));
+      } else {
+        console.error('Failed to fetch Slack data:', response.status, response.statusText);
       }
     } catch (error) {
-      console.error('Error loading Slack workspaces:', error);
+      console.error('Error fetching Slack data:', error);
     }
   };
 
-  // Sample integration data
-  const integrations: IntegrationItem[] = [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description: 'Connect Slack to extract messages, files, and conversations for better context.',
-      icon: '/slack-icon.svg',
-      connected: slackWorkspaces.length > 0,
-      tags: ['Collaboration', 'Messaging'],
-      workspaces: slackWorkspaces,
-    },
-    {
-      id: 'jira',
-      name: 'Jira',
-      description: 'Connect to Jira to fetch issues, track progress, and stay updated on project status.',
-      icon: '/jira-icon.svg',
-      connected: false,
-      tags: ['Project Management', 'Issue Tracking']
-    },
-    {
-      id: 'confluence',
-      name: 'Confluence',
-      description: 'Automatically access documentation, specs, and meeting notes from Confluence.',
-      icon: '/confluence-icon.svg',
-      connected: false,
-      tags: ['Documentation', 'Knowledge Base']
-    },
-    {
-      id: 'zoom',
-      name: 'Zoom',
-      description: 'Auto-joins Zoom meetings to record audio, write notes, capture slides.',
-      icon: '/zoom-icon.svg',
-      connected: false,
-      tags: ['Video Conferencing', 'Meetings']
-    },
-    {
-      id: 'notion',
-      name: 'Notion',
-      description: 'Jelly automatically pushes transcripts and meeting summaries to Notion.',
-      icon: '/notion-icon.svg',
-      connected: false,
-      tags: ['Collaboration', 'Project Management', 'Notes']
+  const handleConnect = async (integrationId: string) => {
+    if (integrationId === 'slack') {
+      await handleSlackConnect();
+    } else {
+      // For Jira and Confluence - show coming soon
+      toast.info(`${integrationId.charAt(0).toUpperCase() + integrationId.slice(1)} integration coming soon!`);
     }
-  ];
+  };
 
   const handleSlackConnect = async () => {
-    setLoading('slack-connect');
     try {
+      setConnectingId('slack');
+      
+      // Call the OAuth endpoint to get auth URL
       const response = await fetch('/api/slack/oauth', {
         method: 'POST',
       });
 
       if (response.ok) {
         const { authUrl } = await response.json();
+        // Redirect to Slack OAuth
         window.location.href = authUrl;
       } else {
-        throw new Error('Failed to initialize OAuth');
+        throw new Error('Failed to initiate Slack OAuth');
       }
     } catch (error) {
       console.error('Error connecting to Slack:', error);
-      toast({
-        title: 'Connection Failed',
-        description: 'Failed to connect to Slack. Please try again.',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(null);
+      toast.error('Failed to connect to Slack');
+      setConnectingId(null);
     }
   };
 
-  const handleSlackSync = async (workspaceId: string) => {
-    setLoading(`slack-sync-${workspaceId}`);
-    setSyncProgress(prev => ({ ...prev, [workspaceId]: 0 }));
+  const handleDisconnect = (integrationId: string) => {
+    if (integrationId === 'slack') {
+      // TODO: Implement Slack disconnect logic
+      toast.info('Disconnect feature coming soon');
+    }
+  };
 
-    try {
-      const response = await fetch('/api/slack/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ workspaceId }),
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        toast({
-          title: 'Sync Completed',
-          description: `Synced ${result.progress.processedMessages} messages and ${result.progress.processedFiles} files.`,
-        });
-        loadSlackWorkspaces(); // Reload to show updated data
+  const handleDetails = (integrationId: string) => {
+    if (integrationId === 'slack') {
+      const slackIntegration = integrations.find(i => i.id === 'slack');
+      console.log('Slack integration details:', slackIntegration); // Debug log
+      
+      if (slackIntegration?.connected) {
+        // Navigate to the existing integrations details page
+        router.push('/integrations/slack');
       } else {
-        throw new Error(result.error || 'Sync failed');
+        toast.info('Connect Slack first to view details');
       }
-    } catch (error) {
-      console.error('Error syncing Slack data:', error);
-      toast({
-        title: 'Sync Failed',
-        description: error instanceof Error ? error.message : 'Failed to sync Slack data.',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(null);
-      setSyncProgress(prev => {
-        const newProgress = { ...prev };
-        delete newProgress[workspaceId];
-        return newProgress;
-      });
+    } else {
+      toast.info(`${integrationId.charAt(0).toUpperCase() + integrationId.slice(1)} details coming soon!`);
     }
   };
 
-  const handleConnect = async (id: string) => {
-    if (id === 'slack') {
-      await handleSlackConnect();
-      return;
+  const handleLogoError = (integrationId: string) => {
+    setLogoErrors(prev => new Set(prev).add(integrationId));
+  };
+
+  useEffect(() => {
+    // Check for OAuth success/error
+    const success = searchParams?.get('success');
+    const error = searchParams?.get('error');
+    
+    if (success === 'slack_connected') {
+      toast.success('Slack workspace connected successfully!');
+      // Remove the success parameter from URL
+      window.history.replaceState({}, '', '/integrations');
+      // Refresh data
+      fetchSlackData();
+    } else if (error) {
+      toast.error(`Connection failed: ${error}`);
+      // Remove the error parameter from URL
+      window.history.replaceState({}, '', '/integrations');
     }
     
-    console.log(`Connecting to ${id}`);
-    toast({
-      title: 'Coming Soon',
-      description: `${id} integration is not yet available.`,
-    });
-  };
-
-  const handleDisconnect = (id: string) => {
-    console.log(`Disconnecting from ${id}`);
-    toast({
-      title: 'Coming Soon',
-      description: 'Disconnect functionality is not yet implemented.',
-    });
-  };
-
-  const renderSlackWorkspaces = (workspaces: SlackWorkspace[]) => {
-    if (!workspaces || workspaces.length === 0) return null;
-
-    return (
-      <div className="mt-4 space-y-2">
-        <h4 className="text-sm font-medium text-muted-foreground">Connected Workspaces:</h4>
-        {workspaces.map((workspace) => (
-          <div key={workspace.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <CheckIcon />
-                <span className="font-medium">{workspace.teamName}</span>
-              </div>
-              {workspace.hasData && (
-                <Badge variant="secondary" className="text-xs">
-                  Data Synced
-                </Badge>
-              )}
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleSlackSync(workspace.id)}
-              disabled={loading === `slack-sync-${workspace.id}`}
-            >
-              {loading === `slack-sync-${workspace.id}` ? (
-                <>
-                  <SpinnerIcon />
-                  Syncing...
-                </>
-              ) : (
-                'Sync Data'
-              )}
-            </Button>
-          </div>
-        ))}
-      </div>
-    );
-  };
+    // Initial data fetch
+    fetchSlackData().finally(() => setLoading(false));
+  }, [searchParams]);
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-5xl">
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-      >
-        <h1 className="text-3xl font-bold mb-2">All Integrations</h1>
-        <p className="text-muted-foreground mb-8">
-          Connect Lumos to your tools to help it understand your product context.
-        </p>
-      </motion.div>
+    <div className="flex-1 overflow-auto">
+      <div className="max-w-4xl mx-auto p-6 space-y-8">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="space-y-2"
+        >
+          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent">
+            Integrations
+          </h1>
+          <p className="text-muted-foreground text-lg">
+            Connect your tools and streamline your workflow
+          </p>
+        </motion.div>
 
-      <div className="grid gap-6">
-        {integrations.map((integration, index) => (
-          <motion.div
-            key={integration.id}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: index * 0.1 }}
-          >
-            <Card className="overflow-hidden border border-border/50 backdrop-blur-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-md overflow-hidden flex items-center justify-center bg-muted">
-                      <img 
-                        src={integration.icon} 
-                        alt={integration.name} 
-                        className="w-8 h-8 object-contain"
-                        onError={(e) => {
-                          // Fallback for missing icons
-                          (e.target as HTMLImageElement).src = '/app-icon.svg';
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <CardTitle className="text-xl">{integration.name}</CardTitle>
-                      <CardDescription className="mt-1">{integration.description}</CardDescription>
-                    </div>
-                  </div>
-
-                  <div>
-                    {integration.connected ? (
-                      integration.id === 'slack' ? (
-                        <Button 
-                          size="sm"
-                          onClick={() => handleSlackConnect()}
-                          disabled={loading === 'slack-connect'}
-                        >
-                          {loading === 'slack-connect' ? (
-                            <>
-                              <SpinnerIcon />
-                              Connecting...
-                            </>
+        {/* Integration Cards */}
+        <div className="grid gap-6">
+          {integrations.map((integration, index) => (
+            <motion.div
+              key={integration.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: index * 0.1 }}
+            >
+              <Card className="group relative overflow-hidden border-0 bg-white dark:bg-slate-900/50 shadow-[0_0_0_1px_rgba(0,0,0,0.05)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.05)] hover:shadow-[0_8px_30px_rgba(0,0,0,0.12)] dark:hover:shadow-[0_8px_30px_rgba(0,0,0,0.3)] transition-all duration-300 hover:scale-[1.02]">
+                {/* Subtle gradient background */}
+                <div className="absolute inset-0 bg-gradient-to-br from-slate-50/50 via-transparent to-slate-100/30 dark:from-slate-800/20 dark:via-transparent dark:to-slate-700/10 pointer-events-none" />
+                
+                <CardHeader className="relative p-6">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      {/* Logo with premium styling */}
+                      <div className="relative integration-logo">
+                        <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-white to-slate-50 dark:from-slate-800 dark:to-slate-700 shadow-lg flex items-center justify-center border border-slate-200/50 dark:border-slate-600/50">
+                          {!logoErrors.has(integration.id) ? (
+                            <img 
+                              src={integration.logoUrl} 
+                              alt={`${integration.name} logo`}
+                              className="w-8 h-8 object-contain"
+                              onError={() => handleLogoError(integration.id)}
+                            />
                           ) : (
-                            'Add Workspace'
+                            <div 
+                              className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
+                              style={{ backgroundColor: integration.fallbackColor }}
+                            >
+                              {integration.name.charAt(0)}
+                            </div>
                           )}
+                        </div>
+                        
+                        {/* Connection status indicator */}
+                        {integration.connected && (
+                          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white dark:border-slate-900 shadow-sm">
+                            <div className="w-full h-full bg-green-400 rounded-full status-connected" />
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="space-y-1 flex-1">
+                        <div className="flex items-center gap-3">
+                          <CardTitle className="text-xl font-semibold text-slate-900 dark:text-white">
+                            {integration.name}
+                          </CardTitle>
+                          {integration.connected && (
+                            <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800 px-2 py-1 text-xs">
+                              Connected
+                            </Badge>
+                          )}
+                          {integration.id !== 'slack' && (
+                            <Badge variant="outline" className="px-2 py-1 text-xs">
+                              Coming Soon
+                            </Badge>
+                          )}
+                        </div>
+                        <CardDescription className="text-slate-600 dark:text-slate-400 leading-relaxed max-w-lg text-sm">
+                          {integration.description}
+                        </CardDescription>
+                        {integration.connected && integration.connectedUser && (
+                          <p className="text-sm text-slate-500 dark:text-slate-500 mt-2">
+                            Connected as {integration.connectedUser}
+                            {integration.id === 'slack' && integration.workspaceData && (
+                              <span className="ml-2">
+                                • {integration.workspaceData.totalWorkspaces} workspace{integration.workspaceData.totalWorkspaces !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Action Buttons */}
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDetails(integration.id)}
+                        className="border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-slate-700 dark:text-slate-300 px-4"
+                        disabled={integration.id === 'slack' && !integration.connected}
+                      >
+                        Details
+                      </Button>
+                      
+                      {integration.connected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDisconnect(integration.id)}
+                          className="bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800 px-4"
+                        >
+                          Remove
                         </Button>
                       ) : (
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          className="text-destructive border-destructive/30 hover:bg-destructive/10"
-                          onClick={() => handleDisconnect(integration.id)}
+                        <Button
+                          size="sm"
+                          onClick={() => handleConnect(integration.id)}
+                          disabled={connectingId === integration.id || loading}
+                          className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 px-4 min-w-[80px]"
                         >
-                          Disconnect
+                          {connectingId === integration.id ? (
+                            <div className="flex items-center gap-2">
+                              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span className="text-sm">Connecting...</span>
+                            </div>
+                          ) : (
+                            'Connect'
+                          )}
                         </Button>
-                      )
-                    ) : (
-                      <Button 
-                        size="sm"
-                        onClick={() => handleConnect(integration.id)}
-                        disabled={loading === `${integration.id}-connect`}
-                        className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground hover:from-primary/90 hover:to-primary/70"
-                      >
-                        {loading === `${integration.id}-connect` ? (
-                          <>
-                            <SpinnerIcon />
-                            Connecting...
-                          </>
-                        ) : (
-                          'Connect'
-                        )}
-                      </Button>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              
-              {integration.id === 'slack' && integration.workspaces && (
-                <CardContent className="pt-0">
-                  {renderSlackWorkspaces(integration.workspaces)}
-                </CardContent>
-              )}
+                </CardHeader>
+              </Card>
+            </motion.div>
+          ))}
+        </div>
 
-              <CardFooter className="pt-0 pb-4 flex gap-2">
-                {integration.tags.map(tag => (
-                  <Badge key={tag} variant="secondary" className="text-xs font-normal">
-                    {tag}
-                  </Badge>
-                ))}
-              </CardFooter>
-            </Card>
-          </motion.div>
-        ))}
+        {/* Footer Info */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
+          className="mt-12 p-6 rounded-xl bg-slate-50/50 dark:bg-slate-800/30 border border-slate-200/50 dark:border-slate-700/50"
+        >
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+              <svg className="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-medium text-slate-900 dark:text-white">Need help getting started?</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Each integration requires proper permissions and setup. Check our documentation for detailed setup guides.
+              </p>
+            </div>
+          </div>
+        </motion.div>
       </div>
     </div>
   );

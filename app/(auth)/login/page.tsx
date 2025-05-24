@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useActionState, useEffect, useState } from 'react';
-import { toast } from '@/components/toast';
+import { toast } from 'sonner';
 
 import { AuthForm } from '@/components/auth-form';
 import { SubmitButton } from '@/components/submit-button';
@@ -13,6 +13,7 @@ import { useSession } from 'next-auth/react';
 
 export default function Page() {
   const router = useRouter();
+  const { data: session, status } = useSession();
 
   const [email, setEmail] = useState('');
   const [isSuccessful, setIsSuccessful] = useState(false);
@@ -26,28 +27,50 @@ export default function Page() {
 
   const { update: updateSession } = useSession();
 
+  // Redirect if already logged in
+  useEffect(() => {
+    if (status === 'authenticated' && session?.user && !isSuccessful) {
+      router.replace('/integrations');
+    }
+  }, [status, session, router, isSuccessful]);
+
   useEffect(() => {
     if (state.status === 'failed') {
-      toast({
-        type: 'error',
-        description: 'Invalid credentials!',
-      });
+      toast.error('Invalid credentials!');
+      setIsSuccessful(false);
     } else if (state.status === 'invalid_data') {
-      toast({
-        type: 'error',
-        description: 'Failed validating your submission!',
-      });
+      toast.error('Failed validating your submission!');
+      setIsSuccessful(false);
     } else if (state.status === 'success') {
       setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      toast.success('Logged in successfully!');
+      
+      console.log('Login successful, redirecting to /integrations');
+      
+      // Use window.location for more reliable redirect
+      setTimeout(() => {
+        window.location.href = '/integrations';
+      }, 100);
     }
   }, [state.status]);
 
   const handleSubmit = (formData: FormData) => {
     setEmail(formData.get('email') as string);
+    setIsSuccessful(false);
     formAction(formData);
   };
+
+  // Don't render form if already authenticated
+  if (status === 'authenticated') {
+    return (
+      <div className="flex h-dvh w-screen items-center justify-center bg-background">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <div className="h-4 w-4 animate-spin border-2 border-current border-t-transparent rounded-full" />
+          Redirecting...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-dvh w-screen items-start pt-12 md:pt-0 md:items-center justify-center bg-background">
@@ -59,7 +82,9 @@ export default function Page() {
           </p>
         </div>
         <AuthForm action={handleSubmit} defaultEmail={email}>
-          <SubmitButton isSuccessful={isSuccessful}>Sign in</SubmitButton>
+          <SubmitButton isSuccessful={isSuccessful}>
+            Sign in
+          </SubmitButton>
           <p className="text-center text-sm text-gray-600 mt-4 dark:text-zinc-400">
             {"Don't have an account? "}
             <Link
