@@ -180,7 +180,12 @@ const PurePreviewMessage = ({
                         {message.role === 'assistant' && (() => {
                           const hasPatterns = hasCitationPattern(part.text);
                           const shouldShowButton = messageSources.length > 0 || hasPatterns;
-                          const isThisMessageOpen = sourcesOpen && JSON.stringify(currentSources) === JSON.stringify(messageSources);
+                          
+                          // Check if this specific message's sources are currently open
+                          const areTheseSourcesOpen = sourcesOpen && currentSources && 
+                            messageSources.length > 0 && 
+                            JSON.stringify(currentSources.map(s => s.messageId).sort()) === 
+                            JSON.stringify(messageSources.map(s => s.messageId).sort());
                           
                           // If we have real sources, use them
                           if (messageSources.length > 0) {
@@ -189,7 +194,7 @@ const PurePreviewMessage = ({
                                 sources={messageSources} 
                                 className="mt-2" 
                                 onViewSources={onViewSources}
-                                isOpen={isThisMessageOpen}
+                                isOpen={areTheseSourcesOpen}
                               />
                             );
                           }
@@ -214,12 +219,17 @@ const PurePreviewMessage = ({
                               sourceIndex: i + 1
                             }));
                             
+                            // Check if placeholder sources for this message are open
+                            const arePlaceholdersOpen = sourcesOpen && currentSources &&
+                              currentSources.length === placeholderSources.length &&
+                              currentSources.every(s => s.messageId.startsWith('placeholder-'));
+                            
                             return (
                               <ViewSourcesButton 
                                 sources={placeholderSources}
                                 className="mt-2" 
                                 onViewSources={onViewSources}
-                                isOpen={isThisMessageOpen}
+                                isOpen={arePlaceholdersOpen}
                               />
                             );
                           }

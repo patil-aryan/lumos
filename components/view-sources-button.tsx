@@ -33,11 +33,15 @@ export function ViewSourcesButton({ sources, className = '', onViewSources, isOp
   const isPlaceholder = sources?.some(source => source.messageId.startsWith('placeholder-'));
   
   let buttonText = 'View Sources (0)';
+  let buttonIcon = '💡';
+  
   if (hasRealSources) {
     if (isPlaceholder) {
       buttonText = `Loading Sources (${sources.length})`;
+      buttonIcon = '⏳';
     } else {
-      buttonText = `View Sources (${sources.length})`;
+      buttonText = `${isOpen ? 'Hide' : 'View'} Sources (${sources.length})`;
+      buttonIcon = isOpen ? '📂' : '💡';
     }
   }
 
@@ -53,7 +57,7 @@ export function ViewSourcesButton({ sources, className = '', onViewSources, isOp
             : 'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
         }`}
       >
-        <span className="text-sm">{isPlaceholder ? '⏳' : (isOpen ? '📂' : '💡')}</span>
+        <span className="text-sm">{buttonIcon}</span>
         <span>{buttonText}</span>
       </Button>
     </div>

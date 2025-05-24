@@ -67,28 +67,44 @@ export function Chat({
 
   // Custom fetch function to intercept sources from headers
   const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    console.log('customFetch called with:', { input, init });
     const response = await fetchWithErrorHandlers(input, init);
     
     // Check for sources in response headers
     const sourcesHeader = response.headers.get('X-Slack-Sources');
-    console.log('Headers check:', { sourcesHeader });
+    console.log('Headers check:', { sourcesHeader: sourcesHeader ? sourcesHeader.substring(0, 50) + '...' : null });
     
     if (sourcesHeader) {
       try {
-        // Decode base64 sources (browser compatible)
-        const sourcesJson = atob(sourcesHeader);
+        // Use a safe base64 decode that works in all environments
+        let sourcesJson: string;
+        if (typeof window !== 'undefined' && typeof window.atob === 'function') {
+          // Browser environment
+          console.log('Using browser atob');
+          sourcesJson = atob(sourcesHeader);
+        } else {
+          // Node.js or other environments - use Buffer
+          console.log('Using Buffer.from');
+          sourcesJson = Buffer.from(sourcesHeader, 'base64').toString('utf-8');
+        }
+        
         const sources = JSON.parse(sourcesJson);
         
-        console.log('Parsed sources from header:', sources);
+        console.log('Successfully parsed sources from header:', { 
+          count: sources.length, 
+          sources: sources.slice(0, 2) // Log first 2 sources for debugging
+        });
         
         // Store sources to be associated with the next assistant message
         if (sources.length > 0) {
           pendingSourcesRef.current = sources;
-          console.log('Stored pending sources:', pendingSourcesRef.current);
+          console.log('Stored pending sources:', { count: pendingSourcesRef.current.length });
         }
       } catch (error) {
         console.error('Error parsing sources from headers:', error);
       }
+    } else {
+      console.log('No X-Slack-Sources header found');
     }
     
     return response;
@@ -297,33 +313,71 @@ export function Chat({
 
   // Associate pending sources with new assistant messages
   useEffect(() => {
-    console.log('useEffect for sources association:', {
+    console.log('useEffect for sources association triggered:', {
       hasPendingSources: !!pendingSourcesRef.current,
-      pendingSources: pendingSourcesRef.current,
+      pendingSourcesCount: pendingSourcesRef.current?.length || 0,
       messagesLength: messages.length,
-      lastMessage: messages.length > 0 ? messages[messages.length - 1] : null,
-      currentMessagesSources: messagesSources
+      lastMessage: messages.length > 0 ? {
+        id: messages[messages.length - 1].id,
+        role: messages[messages.length - 1].role,
+        hasContent: messages[messages.length - 1].parts?.some(p => p.type === 'text' && p.text.trim().length > 0)
+      } : null,
+      messagesSources: Object.keys(messagesSources).length
     });
     
     if (pendingSourcesRef.current && messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
-      console.log('Checking last message:', { 
+      console.log('Checking last message for sources association:', { 
         messageId: lastMessage.id, 
         role: lastMessage.role, 
-        alreadyHasSources: !!messagesSources[lastMessage.id] 
+        alreadyHasSources: !!messagesSources[lastMessage.id],
+        hasRealSources: messagesSources[lastMessage.id]?.some(s => !s.messageId.startsWith('placeholder-'))
       });
       
-      // Associate sources with assistant messages, even if they already have placeholder sources
-      if (lastMessage.role === 'assistant') {
-        console.log('Associating sources with message:', lastMessage.id, pendingSourcesRef.current);
+      // Associate sources with assistant messages that don't already have real sources
+      if (lastMessage.role === 'assistant' && !messagesSources[lastMessage.id]?.some(s => !s.messageId.startsWith('placeholder-'))) {
+        console.log('✅ Associating sources with message:', lastMessage.id, {
+          sourceCount: pendingSourcesRef.current.length,
+          firstSource: pendingSourcesRef.current[0]?.messageId
+        });
         setMessagesSources(prev => ({
           ...prev,
           [lastMessage.id]: pendingSourcesRef.current!
         }));
         pendingSourcesRef.current = null; // Clear pending sources
+      } else {
+        console.log('❌ Skipping sources association:', {
+          isAssistant: lastMessage.role === 'assistant',
+          hasRealSources: messagesSources[lastMessage.id]?.some(s => !s.messageId.startsWith('placeholder-'))
+        });
       }
     }
-  }, [messages]);
+  }, [messages, messagesSources]);
+
+  // Handle pending sources when streaming completes
+  useEffect(() => {
+    if (pendingSourcesRef.current && (status === 'ready' || status === 'error') && messages.length > 0) {
+      console.log('🔄 Checking for pending sources on status change:', { 
+        status, 
+        pendingCount: pendingSourcesRef.current.length,
+        messagesLength: messages.length 
+      });
+      
+      const lastAssistantMessage = messages.slice().reverse().find(m => m.role === 'assistant');
+      if (lastAssistantMessage && !messagesSources[lastAssistantMessage.id]?.some(s => !s.messageId.startsWith('placeholder-'))) {
+        console.log('✅ Associating pending sources on stream completion:', lastAssistantMessage.id, {
+          sourceCount: pendingSourcesRef.current.length
+        });
+        setMessagesSources(prev => ({
+          ...prev,
+          [lastAssistantMessage.id]: pendingSourcesRef.current!
+        }));
+        pendingSourcesRef.current = null;
+      } else {
+        console.log('❌ No suitable message for pending sources on completion');
+      }
+    }
+  }, [status, messages, messagesSources]);
 
   return (
     <>
