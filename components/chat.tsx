@@ -57,8 +57,15 @@ export function Chat({
   const [messagesSources, setMessagesSources] = useState<Record<string, any[]>>({});
   const pendingSourcesRef = useRef<any[] | null>(null);
   
-  // Get sidebar state
-  const { open: sidebarOpen } = useSidebar();
+  // Get sidebar state with null check
+  let sidebarOpen = false;
+  try {
+    const sidebar = useSidebar();
+    sidebarOpen = sidebar?.open || false;
+  } catch (error) {
+    console.warn('Sidebar context not available, using default state');
+    sidebarOpen = false;
+  }
 
   const { visibilityType } = useChatVisibility({
     chatId: id,
@@ -98,7 +105,7 @@ export function Chat({
         // Store sources to be associated with the next assistant message
         if (sources.length > 0) {
           pendingSourcesRef.current = sources;
-          console.log('Stored pending sources:', { count: pendingSourcesRef.current.length });
+          console.log('Stored pending sources:', { count: pendingSourcesRef.current?.length || 0 });
         }
       } catch (error) {
         console.error('Error parsing sources from headers:', error);
