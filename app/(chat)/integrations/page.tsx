@@ -108,11 +108,72 @@ export default function IntegrationsPage() {
     }
   };
 
+  // Fetch Jira connection status
+  const fetchJiraData = async () => {
+    try {
+      const response = await fetch('/api/jira/data');
+      if (response.ok) {
+        const result = await response.json();
+        
+        console.log('Jira data fetched:', result); // Debug log
+        
+        // Update Jira integration status - handle both success and error cases
+        setIntegrations(prev => prev.map(integration => {
+          if (integration.id === 'jira') {
+            const isConnected = result.success && result.data?.workspace;
+            console.log('Updating Jira integration:', { isConnected, workspace: result.data?.workspace }); // Debug log
+            return {
+              ...integration,
+              connected: isConnected,
+              connectedUser: result.data?.workspace?.name || undefined,
+              workspaceData: result.data || null
+            };
+          }
+          return integration;
+        }));
+      } else {
+        console.error('Failed to fetch Jira data:', response.status, response.statusText);
+        // Handle error responses
+        const errorData = await response.json().catch(() => ({ success: false, error: 'Unknown error' }));
+        console.log('Jira error response:', errorData);
+        
+        // Update integration to show disconnected state
+        setIntegrations(prev => prev.map(integration => {
+          if (integration.id === 'jira') {
+            return {
+              ...integration,
+              connected: false,
+              connectedUser: undefined,
+              workspaceData: null
+            };
+          }
+          return integration;
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching Jira data:', error);
+      // Handle network/other errors
+      setIntegrations(prev => prev.map(integration => {
+        if (integration.id === 'jira') {
+          return {
+            ...integration,
+            connected: false,
+            connectedUser: undefined,
+            workspaceData: null
+          };
+        }
+        return integration;
+      }));
+    }
+  };
+
   const handleConnect = async (integrationId: string) => {
     if (integrationId === 'slack') {
       await handleSlackConnect();
+    } else if (integrationId === 'jira') {
+      await handleJiraConnect();
     } else {
-      // For Jira and Confluence - show coming soon
+      // For Confluence - show coming soon
       toast.info(`${integrationId.charAt(0).toUpperCase() + integrationId.slice(1)} integration coming soon!`);
     }
   };
@@ -140,6 +201,19 @@ export default function IntegrationsPage() {
     }
   };
 
+  const handleJiraConnect = async () => {
+    try {
+      setConnectingId('jira');
+      
+      // Redirect directly to Jira OAuth endpoint
+      window.location.href = '/api/jira/connect';
+    } catch (error) {
+      console.error('Error connecting to Jira:', error);
+      toast.error('Failed to connect to Jira');
+      setConnectingId(null);
+    }
+  };
+
   const handleDisconnect = (integrationId: string) => {
     if (integrationId === 'slack') {
       // TODO: Implement Slack disconnect logic
@@ -157,6 +231,16 @@ export default function IntegrationsPage() {
         router.push('/integrations/slack');
       } else {
         toast.info('Connect Slack first to view details');
+      }
+    } else if (integrationId === 'jira') {
+      const jiraIntegration = integrations.find(i => i.id === 'jira');
+      console.log('Jira integration details:', jiraIntegration); // Debug log
+      
+      if (jiraIntegration?.connected) {
+        // Navigate to the Jira details page
+        router.push('/integrations/jira');
+      } else {
+        toast.info('Connect Jira first to view details');
       }
     } else {
       toast.info(`${integrationId.charAt(0).toUpperCase() + integrationId.slice(1)} details coming soon!`);
@@ -178,6 +262,12 @@ export default function IntegrationsPage() {
       window.history.replaceState({}, '', '/integrations');
       // Refresh data
       fetchSlackData();
+    } else if (success === 'jira_connected') {
+      toast.success('Jira workspace connected successfully!');
+      // Remove the success parameter from URL
+      window.history.replaceState({}, '', '/integrations');
+      // Refresh data
+      fetchJiraData();
     } else if (error) {
       toast.error(`Connection failed: ${error}`);
       // Remove the error parameter from URL
@@ -185,7 +275,10 @@ export default function IntegrationsPage() {
     }
     
     // Initial data fetch
-    fetchSlackData().finally(() => setLoading(false));
+    Promise.all([
+      fetchSlackData(),
+      fetchJiraData()
+    ]).finally(() => setLoading(false));
   }, [searchParams]);
 
   return (
@@ -260,7 +353,7 @@ export default function IntegrationsPage() {
                               Connected
                             </Badge>
                           )}
-                          {integration.id !== 'slack' && (
+                          {integration.id === 'confluence' && (
                             <Badge variant="outline" className="px-2 py-1 text-xs">
                               Coming Soon
                             </Badge>
@@ -289,20 +382,33 @@ export default function IntegrationsPage() {
                         size="sm"
                         onClick={() => handleDetails(integration.id)}
                         className="border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-slate-700 dark:text-slate-300 px-4"
-                        disabled={integration.id === 'slack' && !integration.connected}
+                        disabled={!integration.connected && (integration.id === 'slack' || integration.id === 'jira')}
                       >
                         Details
                       </Button>
                       
                       {integration.connected ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleDisconnect(integration.id)}
-                          className="bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800 px-4"
-                        >
-                          Remove
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          {/* Show Reconnect button for Jira if there are connection issues */}
+                          {integration.id === 'jira' && (
+                            <Button
+                              size="sm"
+                              onClick={() => handleConnect(integration.id)}
+                              disabled={connectingId === integration.id}
+                              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4"
+                            >
+                              {connectingId === integration.id ? 'Reconnecting...' : 'Reconnect'}
+                            </Button>
+                          )}
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleDisconnect(integration.id)}
+                            className="bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800 px-4"
+                          >
+                            Remove
+                          </Button>
+                        </div>
                       ) : (
                         <Button
                           size="sm"
