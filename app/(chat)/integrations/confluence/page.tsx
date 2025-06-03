@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { 
   ChevronLeft
@@ -91,6 +92,12 @@ export default function ConfluenceIntegrationPage() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
+  
+  // Page content modal state
+  const [selectedPage, setSelectedPage] = useState<any>(null);
+  const [pageContent, setPageContent] = useState<any>(null);
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [showPageModal, setShowPageModal] = useState(false);
 
   const fetchConfluenceData = useCallback(async () => {
     setLoading(true);
@@ -185,6 +192,32 @@ export default function ConfluenceIntegrationPage() {
     } catch (err: any) {
       console.error('Error disconnecting Confluence:', err);
       toast.error(`Disconnect failed: ${err.message}`);
+    }
+  };
+
+  const handleViewPage = async (page: ConfluencePageItem) => {
+    setSelectedPage(page);
+    setLoadingContent(true);
+    setShowPageModal(true);
+    
+    try {
+      const response = await fetch(`/api/confluence/page/${page.id}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to fetch page content');
+      }
+      const result = await response.json();
+      if (result.success) {
+        setPageContent(result.data);
+      } else {
+        throw new Error(result.error || 'Failed to load page content');
+      }
+    } catch (err: any) {
+      console.error('Error fetching page content:', err);
+      toast.error(`Failed to load page: ${err.message}`);
+      setShowPageModal(false);
+    } finally {
+      setLoadingContent(false);
     }
   };
 
@@ -518,21 +551,31 @@ export default function ConfluenceIntegrationPage() {
                               )}
                             </TableCell>
                             <TableCell className="px-6 py-4 text-right">
-                              {page._links?.webui && (
+                              <div className="flex gap-2 justify-end">
                                 <Button 
                                   variant="outline" 
                                   size="sm" 
-                                  className="border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
-                                  onClick={() => {
-                                    const url = page._links?.webui;
-                                    if (url) {
-                                      window.open(url, '_blank');
-                                    }
-                                  }}
+                                  className="border-blue-200 text-blue-600 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20 transition-colors"
+                                  onClick={() => handleViewPage(page)}
                                 >
-                                  View Page
+                                  View Details
                                 </Button>
-                              )}
+                                {page._links?.webui && (
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    className="border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+                                    onClick={() => {
+                                      const url = page._links?.webui;
+                                      if (url) {
+                                        window.open(url, '_blank');
+                                      }
+                                    }}
+                                  >
+                                    Open in Confluence
+                                  </Button>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -553,6 +596,80 @@ export default function ConfluenceIntegrationPage() {
           </Tabs>
         </div>
       </div>
+
+      {/* Page Content Modal */}
+      <Dialog open={showPageModal} onOpenChange={setShowPageModal}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold">
+              {selectedPage?.title || 'Loading...'}
+            </DialogTitle>
+            {pageContent && (
+              <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <Badge variant="outline" className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
+                  {pageContent.space?.key}
+                </Badge>
+                <span>•</span>
+                <span>By {pageContent.version?.by?.displayName || 'Unknown'}</span>
+                <span>•</span>
+                <span>{pageContent.version?.when ? formatDate(pageContent.version.when) : 'Unknown date'}</span>
+              </div>
+            )}
+          </DialogHeader>
+          
+          <div className="flex-1 overflow-auto">
+            {loadingContent ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                <p className="ml-2 text-slate-600 dark:text-slate-400">Loading page content...</p>
+              </div>
+            ) : pageContent?.body?.view?.value ? (
+              <div 
+                className="prose prose-slate dark:prose-invert max-w-none p-4"
+                dangerouslySetInnerHTML={{ __html: pageContent.body.view.value }}
+              />
+            ) : pageContent?.body?.storage?.value ? (
+              <div 
+                className="prose prose-slate dark:prose-invert max-w-none p-4"
+                dangerouslySetInnerHTML={{ __html: pageContent.body.storage.value }}
+              />
+            ) : (
+              <div className="text-center py-12">
+                <span className="text-4xl mb-4 block">📄</span>
+                <h3 className="text-lg font-medium text-slate-700 dark:text-slate-300 mb-2">No Content Available</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  This page doesn&apos;t have viewable content or it couldn&apos;t be loaded.
+                </p>
+                {pageContent && (
+                  <details className="mt-4 text-left">
+                    <summary className="cursor-pointer text-xs text-slate-400">Debug Info</summary>
+                    <pre className="text-xs text-slate-600 dark:text-slate-400 mt-2 p-2 bg-slate-100 dark:bg-slate-800 rounded">
+                      {JSON.stringify({
+                        hasBody: !!pageContent.body,
+                        bodyKeys: pageContent.body ? Object.keys(pageContent.body) : 'no body',
+                        hasView: !!pageContent.body?.view,
+                        hasStorage: !!pageContent.body?.storage
+                      }, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+          
+          {pageContent?._links?.webui && (
+            <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+              <Button 
+                variant="outline" 
+                onClick={() => window.open(pageContent._links.webui, '_blank')}
+                className="w-full"
+              >
+                Open Full Page in Confluence
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 

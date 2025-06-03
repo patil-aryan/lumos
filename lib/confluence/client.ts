@@ -48,11 +48,19 @@ export interface ConfluencePage {
   type: string; // 'page', 'blogpost', 'comment'
   status: string; // 'current', 'trashed', 'deleted'
   title: string;
+  spaceId?: string; // API v2 returns spaceId instead of expanded space
   space?: {
     id: string;
     key: string;
     name: string;
   };
+  authorId?: string; // API v2 returns authorId
+  ownerId?: string; // API v2 additional fields
+  lastOwnerId?: string;
+  parentId?: string;
+  parentType?: string;
+  position?: number;
+  createdAt?: string; // API v2 returns createdAt
   body?: {
     view?: {
       value: string;
@@ -75,6 +83,11 @@ export interface ConfluencePage {
       displayName: string;
       email?: string;
     };
+    // API v2 additional version fields
+    minorEdit?: boolean;
+    authorId?: string;
+    createdAt?: string;
+    ncsStepVersion?: number;
   };
   ancestors?: Array<{
     id: string;

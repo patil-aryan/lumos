@@ -120,9 +120,32 @@ export async function GET(request: NextRequest) {
         
         for (const space of spacesToFetch) {
           try {
-            // Use the correct expand parameters for Confluence API v2
-            const contentResponse = await confluenceClient.getPages(space.key, 20, undefined, ['space', 'version', '_links']);
+            // Use the default expand parameters which should include version data
+            const contentResponse = await confluenceClient.getPages(space.key, 20, undefined);
             const spaceContent = contentResponse.results || [];
+            
+            // Debug logging to see what data we're actually getting
+            if (spaceContent.length > 0) {
+              const samplePage = spaceContent[0];
+              console.log(`Sample page data from space ${space.key}:`, {
+                id: samplePage.id,
+                title: samplePage.title,
+                hasSpace: !!samplePage.space,
+                spaceKey: samplePage.space?.key,
+                spaceName: samplePage.space?.name,
+                hasVersion: !!samplePage.version,
+                versionNumber: samplePage.version?.number,
+                versionWhen: samplePage.version?.when,
+                hasAuthor: !!samplePage.version?.by,
+                authorName: samplePage.version?.by?.displayName,
+                authorAccountId: samplePage.version?.by?.accountId,
+                hasLinks: !!samplePage._links,
+                webUILink: samplePage._links?.webui,
+                allVersionFields: samplePage.version ? Object.keys(samplePage.version) : 'no version',
+                allPageFields: Object.keys(samplePage)
+              });
+            }
+            
             recentContent = [...recentContent, ...spaceContent];
             totalContent += contentResponse.size || spaceContent.length;
             
@@ -134,9 +157,27 @@ export async function GET(request: NextRequest) {
       } else {
         // Fallback: fetch all content if no spaces found
         try {
-          const contentResponse = await confluenceClient.getPages(undefined, 50, undefined, ['space', 'version', '_links']);
+          const contentResponse = await confluenceClient.getPages(undefined, 50, undefined);
           recentContent = contentResponse.results || [];
           totalContent = contentResponse.size || recentContent.length;
+          
+          if (recentContent.length > 0) {
+            const samplePage = recentContent[0];
+            console.log('Sample page data (fallback):', {
+              id: samplePage.id,
+              title: samplePage.title,
+              hasSpace: !!samplePage.space,
+              spaceKey: samplePage.space?.key,
+              hasVersion: !!samplePage.version,
+              versionNumber: samplePage.version?.number,
+              versionWhen: samplePage.version?.when,
+              hasAuthor: !!samplePage.version?.by,
+              authorName: samplePage.version?.by?.displayName,
+              hasLinks: !!samplePage._links,
+              webUILink: samplePage._links?.webui
+            });
+          }
+          
           console.log(`Fetched ${recentContent.length} pages (fallback)`);
         } catch (error) {
           console.error('Failed to fetch content (fallback):', error);
@@ -146,10 +187,46 @@ export async function GET(request: NextRequest) {
 
       // Sort content by last modified date
       recentContent.sort((a, b) => {
-        const dateA = new Date(a.version?.when || 0);
-        const dateB = new Date(b.version?.when || 0);
+        const dateA = new Date(a.createdAt || a.version?.createdAt || a.version?.when || 0);
+        const dateB = new Date(b.createdAt || b.version?.createdAt || b.version?.when || 0);
         return dateB.getTime() - dateA.getTime();
       });
+
+      // Create a simple space lookup map
+      const spaceLookup = new Map(spaces.map(space => [space.id, space]));
+
+      // Collect all unique author IDs for user lookup
+      const authorIds = new Set<string>();
+      recentContent.forEach(page => {
+        if (page.authorId) authorIds.add(page.authorId);
+        if (page.version?.authorId) authorIds.add(page.version.authorId);
+      });
+
+      // Fetch user information for authors
+      const userLookup = new Map<string, string>();
+      console.log(`Found ${authorIds.size} unique author IDs, attempting to fetch user details...`);
+      
+      for (const authorId of authorIds) {
+        try {
+          const user = await confluenceClient.getUserById(authorId);
+          userLookup.set(authorId, user.displayName || user.publicName || `User ${authorId}`);
+          console.log(`Fetched user: ${authorId} -> ${user.displayName || user.publicName}`);
+        } catch (error) {
+          console.warn(`Failed to fetch user ${authorId}:`, error);
+          // Create a cleaner fallback name from the authorId
+          let cleanName = 'Unknown User';
+          if (authorId && authorId !== 'unknown') {
+            // Extract a readable part from account IDs like "712020:26988aed-b484-47be-93ce-99cf99ce872e"
+            const parts = authorId.split(':');
+            if (parts.length === 2) {
+              cleanName = `User ${parts[0]}`;
+            } else {
+              cleanName = `User ${authorId.substring(0, 8)}`;
+            }
+          }
+          userLookup.set(authorId, cleanName);
+        }
+      }
 
       // Fetch users (sample from content creators)
       let users: ConfluenceUser[] = [];
@@ -199,21 +276,36 @@ export async function GET(request: NextRequest) {
             name: space.name,
             _links: {
               webui: space._links?.webui ? 
-                (space._links.webui.startsWith('http') ? space._links.webui : `${confluenceWorkspaceData.url}${space._links.webui}`) :
-                `${confluenceWorkspaceData.url}/spaces/${space.key}`
+                (space._links.webui.startsWith('http') ? space._links.webui : `${confluenceWorkspaceData.url}/wiki${space._links.webui}`) :
+                `${confluenceWorkspaceData.url}/wiki/spaces/${space.key}`
             },
           })),
-          pagesList: recentContent.slice(0, 20).map(page => ({
-            id: page.id,
-            title: page.title,
-            space: page.space,
-            version: page.version,
-            _links: {
-              webui: page._links?.webui ? 
-                (page._links.webui.startsWith('http') ? page._links.webui : `${confluenceWorkspaceData.url}${page._links.webui}`) :
-                `${confluenceWorkspaceData.url}/spaces/${page.space?.key}/pages/${page.id}`
-            },
-          })),
+          pagesList: recentContent.slice(0, 20).map(page => {
+            const pageSpace = spaceLookup.get(page.spaceId || '');
+            return {
+              id: page.id,
+              title: page.title,
+              space: page.space || (pageSpace ? {
+                id: pageSpace.id,
+                key: pageSpace.key,
+                name: pageSpace.name
+              } : undefined),
+              version: {
+                number: page.version?.number || 1,
+                when: page.createdAt || page.version?.createdAt || page.version?.when || new Date().toISOString(),
+                by: {
+                  accountId: page.authorId || page.version?.authorId || 'unknown',
+                  displayName: userLookup.get(page.authorId || page.version?.authorId || 'unknown') || 'Unknown User',
+                  email: undefined
+                }
+              },
+              _links: {
+                webui: page._links?.webui ? 
+                  (page._links.webui.startsWith('http') ? page._links.webui : `${confluenceWorkspaceData.url}/wiki${page._links.webui}`) :
+                  `${confluenceWorkspaceData.url}/wiki/spaces/${pageSpace?.key || 'unknown'}/pages/${page.id}`
+              },
+            };
+          }),
           connectionStatus: 'healthy' as const,
         },
       };
