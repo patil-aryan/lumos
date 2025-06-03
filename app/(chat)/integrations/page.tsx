@@ -114,30 +114,24 @@ export default function IntegrationsPage() {
       const response = await fetch('/api/jira/data');
       if (response.ok) {
         const result = await response.json();
-        
-        console.log('Jira data fetched:', result); // Debug log
-        
-        // Update Jira integration status - handle both success and error cases
-        setIntegrations(prev => prev.map(integration => {
-          if (integration.id === 'jira') {
-            const isConnected = result.success && result.data?.workspace;
-            console.log('Updating Jira integration:', { isConnected, workspace: result.data?.workspace }); // Debug log
-            return {
-              ...integration,
-              connected: isConnected,
-              connectedUser: result.data?.workspace?.name || undefined,
-              workspaceData: result.data || null
-            };
-          }
-          return integration;
-        }));
-      } else {
-        console.error('Failed to fetch Jira data:', response.status, response.statusText);
-        // Handle error responses
-        const errorData = await response.json().catch(() => ({ success: false, error: 'Unknown error' }));
-        console.log('Jira error response:', errorData);
-        
-        // Update integration to show disconnected state
+        if (result.success && result.data?.workspace) {
+          setIntegrations(prev => prev.map(integration => {
+            if (integration.id === 'jira') {
+              return {
+                ...integration,
+                connected: true,
+                connectedUser: result.data.workspace.name,
+                workspaceData: {
+                  ...result.data.stats,
+                  lastSyncAt: result.data.workspace.lastSyncAt
+                }
+              };
+            }
+            return integration;
+          }));
+        }
+      } else if (response.status === 404) {
+        // No workspace found - mark as disconnected
         setIntegrations(prev => prev.map(integration => {
           if (integration.id === 'jira') {
             return {
@@ -167,13 +161,82 @@ export default function IntegrationsPage() {
     }
   };
 
+  const fetchConfluenceData = async () => {
+    try {
+      const response = await fetch('/api/confluence/data');
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data?.workspace) {
+          setIntegrations(prev => prev.map(integration => {
+            if (integration.id === 'confluence') {
+              return {
+                ...integration,
+                connected: true,
+                connectedUser: result.data.workspace.name,
+                workspaceData: {
+                  spaces: result.data.stats.spaces,
+                  pages: result.data.stats.pages,
+                  users: result.data.stats.users,
+                  lastSyncAt: result.data.workspace.lastSyncAt
+                }
+              };
+            }
+            return integration;
+          }));
+        } else {
+          // No data or unsuccessful response - mark as disconnected
+          setIntegrations(prev => prev.map(integration => {
+            if (integration.id === 'confluence') {
+              return {
+                ...integration,
+                connected: false,
+                connectedUser: undefined,
+                workspaceData: null
+              };
+            }
+            return integration;
+          }));
+        }
+      } else if (response.status === 404) {
+        // No workspace found - mark as disconnected
+        setIntegrations(prev => prev.map(integration => {
+          if (integration.id === 'confluence') {
+            return {
+              ...integration,
+              connected: false,
+              connectedUser: undefined,
+              workspaceData: null
+            };
+          }
+          return integration;
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching Confluence data:', error);
+      // Handle network/other errors
+      setIntegrations(prev => prev.map(integration => {
+        if (integration.id === 'confluence') {
+          return {
+            ...integration,
+            connected: false,
+            connectedUser: undefined,
+            workspaceData: null
+          };
+        }
+        return integration;
+      }));
+    }
+  };
+
   const handleConnect = async (integrationId: string) => {
     if (integrationId === 'slack') {
       await handleSlackConnect();
     } else if (integrationId === 'jira') {
       await handleJiraConnect();
+    } else if (integrationId === 'confluence') {
+      await handleConfluenceConnect();
     } else {
-      // For Confluence - show coming soon
+      // For other integrations - show coming soon
       toast.info(`${integrationId.charAt(0).toUpperCase() + integrationId.slice(1)} integration coming soon!`);
     }
   };
@@ -214,6 +277,19 @@ export default function IntegrationsPage() {
     }
   };
 
+  const handleConfluenceConnect = async () => {
+    try {
+      setConnectingId('confluence');
+      
+      // Redirect directly to Confluence OAuth endpoint
+      window.location.href = '/api/confluence/connect';
+    } catch (error) {
+      console.error('Error connecting to Confluence:', error);
+      toast.error('Failed to connect to Confluence');
+      setConnectingId(null);
+    }
+  };
+
   const handleDisconnect = (integrationId: string) => {
     if (integrationId === 'slack') {
       // TODO: Implement Slack disconnect logic
@@ -242,6 +318,13 @@ export default function IntegrationsPage() {
       } else {
         toast.info('Connect Jira first to view details');
       }
+    } else if (integrationId === 'confluence') {
+      const confluenceIntegration = integrations.find(i => i.id === 'confluence');
+      if (confluenceIntegration?.connected) {
+        router.push('/integrations/confluence');
+      } else {
+        toast.info('Connect Confluence first to view details');
+      }
     } else {
       toast.info(`${integrationId.charAt(0).toUpperCase() + integrationId.slice(1)} details coming soon!`);
     }
@@ -268,6 +351,12 @@ export default function IntegrationsPage() {
       window.history.replaceState({}, '', '/integrations');
       // Refresh data
       fetchJiraData();
+    } else if (success === 'confluence_connected') {
+      toast.success('Confluence workspace connected successfully!');
+      // Remove the success parameter from URL
+      window.history.replaceState({}, '', '/integrations');
+      // Refresh data
+      fetchConfluenceData();
     } else if (error) {
       toast.error(`Connection failed: ${error}`);
       // Remove the error parameter from URL
@@ -277,7 +366,8 @@ export default function IntegrationsPage() {
     // Initial data fetch
     Promise.all([
       fetchSlackData(),
-      fetchJiraData()
+      fetchJiraData(),
+      fetchConfluenceData()
     ]).finally(() => setLoading(false));
   }, [searchParams]);
 
@@ -353,11 +443,6 @@ export default function IntegrationsPage() {
                               Connected
                             </Badge>
                           )}
-                          {integration.id === 'confluence' && (
-                            <Badge variant="outline" className="px-2 py-1 text-xs">
-                              Coming Soon
-                            </Badge>
-                          )}
                         </div>
                         <CardDescription className="text-slate-600 dark:text-slate-400 leading-relaxed max-w-lg text-sm">
                           {integration.description}
@@ -368,6 +453,16 @@ export default function IntegrationsPage() {
                             {integration.id === 'slack' && integration.workspaceData && (
                               <span className="ml-2">
                                 • {integration.workspaceData.totalWorkspaces} workspace{integration.workspaceData.totalWorkspaces !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                            {integration.id === 'jira' && integration.workspaceData && (
+                              <span className="ml-2">
+                                • {integration.workspaceData.projects || 0} projects, {integration.workspaceData.issues || 0} issues
+                              </span>
+                            )}
+                            {integration.id === 'confluence' && integration.workspaceData && (
+                              <span className="ml-2">
+                                • {integration.workspaceData.spaces || 0} spaces, {integration.workspaceData.pages || 0} pages
                               </span>
                             )}
                           </p>
@@ -382,7 +477,7 @@ export default function IntegrationsPage() {
                         size="sm"
                         onClick={() => handleDetails(integration.id)}
                         className="border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-slate-700 dark:text-slate-300 px-4"
-                        disabled={!integration.connected && (integration.id === 'slack' || integration.id === 'jira')}
+                        disabled={!integration.connected}
                       >
                         Details
                       </Button>

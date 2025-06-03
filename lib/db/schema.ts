@@ -249,11 +249,11 @@ export const slackUser = pgTable('SlackUser', {
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
   lastActive: timestamp('lastActive'),
   metadata: json('metadata'),
-}, (table) => [
-  index('idx_slack_user_workspace').on(table.workspaceId),
-  index('idx_slack_user_userid').on(table.userId),
-  uniqueIndex('idx_slack_user_unique').on(table.userId, table.workspaceId),
-]);
+}, (table) => ({
+  workspaceIdx: index('idx_slack_user_workspace').on(table.workspaceId),
+  userIdIdx: index('idx_slack_user_userid').on(table.userId),
+  uniqueIdx: uniqueIndex('idx_slack_user_unique').on(table.userId, table.workspaceId),
+}));
 
 export const slackChannel = pgTable('SlackChannel', {
   id: uuid('id').primaryKey().notNull().defaultRandom(),
@@ -285,11 +285,11 @@ export const slackChannel = pgTable('SlackChannel', {
   lastMessageAt: timestamp('lastMessageAt'),
   lastSyncAt: timestamp('lastSyncAt'),
   metadata: json('metadata'),
-}, (table) => [
-  index('idx_slack_channel_workspace').on(table.workspaceId),
-  index('idx_slack_channel_channelid').on(table.channelId),
-  uniqueIndex('idx_slack_channel_unique').on(table.channelId, table.workspaceId),
-]);
+}, (table) => ({
+  workspaceIdx: index('idx_slack_channel_workspace').on(table.workspaceId),
+  channelIdIdx: index('idx_slack_channel_channelid').on(table.channelId),
+  uniqueIdx: uniqueIndex('idx_slack_channel_unique').on(table.channelId, table.workspaceId),
+}));
 
 export const slackMessage = pgTable('SlackMessage', {
   id: uuid('id').primaryKey().notNull().defaultRandom(),
@@ -334,14 +334,14 @@ export const slackMessage = pgTable('SlackMessage', {
   slackUpdatedAt: timestamp('slackUpdatedAt'),
   // Full message metadata
   metadata: json('metadata'),
-}, (table) => [
-  index('idx_slack_message_workspace').on(table.workspaceId),
-  index('idx_slack_message_channel').on(table.channelId),
-  index('idx_slack_message_user').on(table.userId),
-  index('idx_slack_message_timestamp').on(table.timestamp),
-  index('idx_slack_message_thread').on(table.threadTs),
-  uniqueIndex('idx_slack_message_unique').on(table.messageId, table.workspaceId),
-]);
+}, (table) => ({
+  workspaceIdx: index('idx_slack_message_workspace').on(table.workspaceId),
+  channelIdx: index('idx_slack_message_channel').on(table.channelId),
+  userIdx: index('idx_slack_message_user').on(table.userId),
+  timestampIdx: index('idx_slack_message_timestamp').on(table.timestamp),
+  threadIdx: index('idx_slack_message_thread').on(table.threadTs),
+  uniqueIdx: uniqueIndex('idx_slack_message_unique').on(table.messageId, table.workspaceId),
+}));
 
 // New table for individual message reactions
 export const slackReaction = pgTable('SlackReaction', {
@@ -359,11 +359,11 @@ export const slackReaction = pgTable('SlackReaction', {
   users: json('users').notNull(), // Array of user IDs who reacted
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-}, (table) => [
-  index('idx_slack_reaction_message').on(table.messageId),
-  index('idx_slack_reaction_workspace').on(table.workspaceId),
-  uniqueIndex('idx_slack_reaction_unique').on(table.messageId, table.emoji),
-]);
+}, (table) => ({
+  messageIdx: index('idx_slack_reaction_message').on(table.messageId),
+  workspaceIdx: index('idx_slack_reaction_workspace').on(table.workspaceId),
+  uniqueIdx: uniqueIndex('idx_slack_reaction_unique').on(table.messageId, table.emoji),
+}));
 
 // Enhanced file table with better content extraction
 export const slackFile = pgTable('SlackFile', {
@@ -425,12 +425,12 @@ export const slackFile = pgTable('SlackFile', {
   slackUpdatedAt: timestamp('slackUpdatedAt'),
   // Metadata
   metadata: json('metadata'),
-}, (table) => [
-  index('idx_slack_file_workspace').on(table.workspaceId),
-  index('idx_slack_file_user').on(table.userId),
-  index('idx_slack_file_message').on(table.messageId),
-  index('idx_slack_file_channel').on(table.channelId),
-]);
+}, (table) => ({
+  workspaceIdx: index('idx_slack_file_workspace').on(table.workspaceId),
+  userIdx: index('idx_slack_file_user').on(table.userId),
+  messageIdx: index('idx_slack_file_message').on(table.messageId),
+  channelIdx: index('idx_slack_file_channel').on(table.channelId),
+}));
 
 // New table for tracking conversation members
 export const slackChannelMember = pgTable('SlackChannelMember', {
@@ -444,12 +444,12 @@ export const slackChannelMember = pgTable('SlackChannelMember', {
   dateJoined: timestamp('dateJoined'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-}, (table) => [
-  index('idx_slack_channel_member_channel').on(table.channelId),
-  index('idx_slack_channel_member_user').on(table.userId),
-  index('idx_slack_channel_member_workspace').on(table.workspaceId),
-  uniqueIndex('idx_slack_channel_member_unique').on(table.channelId, table.userId, table.workspaceId),
-]);
+}, (table) => ({
+  channelIdx: index('idx_slack_channel_member_channel').on(table.channelId),
+  userIdx: index('idx_slack_channel_member_user').on(table.userId),
+  workspaceIdx: index('idx_slack_channel_member_workspace').on(table.workspaceId),
+  uniqueIdx: uniqueIndex('idx_slack_channel_member_unique').on(table.channelId, table.userId, table.workspaceId),
+}));
 
 // New table for sync status tracking
 export const slackSyncLog = pgTable('SlackSyncLog', {
@@ -477,11 +477,11 @@ export const slackSyncLog = pgTable('SlackSyncLog', {
   channelFilter: json('channelFilter'), // Selected channels
   configuration: json('configuration'), // Sync settings
   metadata: json('metadata'),
-}, (table) => [
-  index('idx_slack_sync_log_workspace').on(table.workspaceId),
-  index('idx_slack_sync_log_status').on(table.status),
-  index('idx_slack_sync_log_started').on(table.startedAt),
-]);
+}, (table) => ({
+  workspaceIdx: index('idx_slack_sync_log_workspace').on(table.workspaceId),
+  statusIdx: index('idx_slack_sync_log_status').on(table.status),
+  startedIdx: index('idx_slack_sync_log_started').on(table.startedAt),
+}));
 
 // Export types for all Slack tables
 export type SlackWorkspace = InferSelectModel<typeof slackWorkspace>;
@@ -490,22 +490,22 @@ export type SlackChannel = InferSelectModel<typeof slackChannel>;
 export type SlackMessage = InferSelectModel<typeof slackMessage>;
 export type SlackFile = InferSelectModel<typeof slackFile>;
 
-// Vector embeddings for Slack messages (RAG)
-export const slackMessageEmbedding = pgTable('SlackMessageEmbedding', {
-  id: uuid('id').primaryKey().notNull().defaultRandom(),
-  messageId: uuid('messageId')
-    .notNull()
-    .references(() => slackMessage.id, { onDelete: 'cascade' }),
-  workspaceId: uuid('workspaceId')
-    .notNull()
-    .references(() => slackWorkspace.id),
-  content: text('content').notNull(), // The message text that was embedded
-  contextInfo: json('contextInfo').notNull(), // Channel name, username, timestamp, etc.
-  embedding: vector('embedding', { dimensions: 1536 }), // OpenAI text-embedding-ada-002 dimension
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-}, (table) => [
-  // Create vector similarity index for fast retrieval
-  index('slack_embedding_cosine_idx').using('hnsw', table.embedding.op('vector_cosine_ops')),
-]);
+// Confluence Integration Schema - Import from separate file
+export {
+  confluenceWorkspace,
+  confluenceSpace,
+  confluencePage,
+  confluenceUser,
+  confluenceComment,
+  confluenceSyncLog
+} from './schema-confluence';
 
-export type SlackMessageEmbedding = InferSelectModel<typeof slackMessageEmbedding>;
+// Export Confluence types
+export type {
+  ConfluenceWorkspace,
+  ConfluenceSpace,
+  ConfluencePage,
+  ConfluenceUser,
+  ConfluenceComment,
+  ConfluenceSyncLog
+} from './schema-confluence';

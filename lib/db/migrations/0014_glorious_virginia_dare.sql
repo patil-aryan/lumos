@@ -1,0 +1,1 @@
+ALTER TABLE "SlackFile" ALTER COLUMN "size" SET DATA TYPE bigint;
